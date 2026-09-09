@@ -4,17 +4,15 @@ import { INSTRUMENTS } from "../lib/instruments.ts";
 ---
 
 <BaseLayout
-  title="Tête de Moule — les doigtés sur ta partition, automatiquement"
-  description="Dépose une partition MuseScore, choisis ton instrument, et récupère ta partie seule avec les doigtés et le nom des notes, prête à imprimer."
+  title="Tête de Moule — atelier des doigtés"
+  description="Dépose une partition MuseScore, récupère ta partie seule avec les doigtés, prête à imprimer."
 >
   <section class="hero">
     <div class="shell">
-      <p class="eyebrow">Pour les fanfares</p>
-      <h1>Les doigtés sur ta partition,<br />sans le crayon.</h1>
+      <h1>Atelier des doigtés</h1>
       <p class="hero__lead">
-        Dépose le fichier MuseScore que ton chef t'a envoyé. Choisis ton
-        instrument une fois pour toutes. Récupère ta partie seule, doigtée note
-        par note, prête à poser sur le pupitre.
+        Dépose une partition MuseScore. Récupère ta partie, doigtée, prête à
+        imprimer.
       </p>
     </div>
   </section>
@@ -26,7 +24,7 @@ import { INSTRUMENTS } from "../lib/instruments.ts";
           <h2 class="ui" style="font-size:1.1rem">Réglages</h2>
 
           <label class="field">
-            <span class="field__label">Ton instrument</span>
+            <span class="field__label">Instrument</span>
             <select id="instrument">
               {INSTRUMENTS.map((instrument) => (
                 <option value={instrument.id}>{instrument.label}</option>
@@ -36,17 +34,17 @@ import { INSTRUMENTS } from "../lib/instruments.ts";
           </label>
 
           <label class="field">
-            <span class="field__label">Comment tu lis</span>
+            <span class="field__label">Lecture</span>
             <select id="reading"></select>
           </label>
 
           <label class="field" id="valves-field">
-            <span class="field__label">Nombre de pistons</span>
+            <span class="field__label">Pistons</span>
             <select id="valves"></select>
           </label>
 
           <div class="field">
-            <span class="field__label">Sur la partition</span>
+            <span class="field__label">Afficher</span>
             <div class="toggles">
               <label class="toggle"><input type="checkbox" id="show-fingerings" checked /> Doigtés</label>
               <label class="toggle"><input type="checkbox" id="show-note-names" checked /> Noms des notes</label>
@@ -55,7 +53,7 @@ import { INSTRUMENTS } from "../lib/instruments.ts";
           </div>
 
           <label class="field hidden" id="part-field">
-            <span class="field__label">Ta partie</span>
+            <span class="field__label">Partie</span>
             <select id="part"></select>
             <span class="field__hint" id="part-hint"></span>
           </label>
@@ -65,7 +63,7 @@ import { INSTRUMENTS } from "../lib/instruments.ts";
           <div id="dropzone" class="dropzone" tabindex="0" role="button"
                aria-label="Choisir une partition MuseScore">
             <p class="dropzone__title">Dépose ta partition ici</p>
-            <p class="muted small" style="margin:0">Fichier MuseScore (.mscz) — ou clique pour le choisir</p>
+            <p class="muted small" style="margin:0">.mscz — ou clique pour choisir</p>
             <input type="file" id="file" accept=".mscz,.mscx" class="hidden" />
           </div>
 
@@ -89,26 +87,22 @@ import { INSTRUMENTS } from "../lib/instruments.ts";
     <div class="shell">
       <div class="section__head">
         <h2>La suite</h2>
-        <p class="muted">
-          L'atelier des doigtés est la première brique. D'autres arrivent, au
-          rythme des répétitions.
-        </p>
+        <p class="muted">Au rythme des répétitions.</p>
       </div>
       <div class="grid-cards">
         <article class="card">
           <h3>Tableau des doigtés</h3>
           <p class="muted small" style="margin:0">
-            Toutes les combinaisons sur l'ambitus complet, et la série harmonique
-            de chaque doigté — un doigté, plusieurs notes.
+            Toutes les combinaisons, et les notes que donne chacune.
           </p>
         </article>
         <article class="card card--soon">
           <h3>Le répertoire</h3>
-          <p class="small" style="margin:0">Les morceaux de la fanfare au même endroit, avec les parties de chacun.</p>
+          <p class="small" style="margin:0">Les morceaux de la fanfare, avec la partie de chacun.</p>
         </article>
         <article class="card card--soon">
           <h3>Écouter sa partie</h3>
-          <p class="small" style="margin:0">Jouer la ligne seule, ou par-dessus le reste, pour la travailler chez soi.</p>
+          <p class="small" style="margin:0">Jouer sa ligne seule, ou par-dessus le reste.</p>
         </article>
       </div>
     </div>
