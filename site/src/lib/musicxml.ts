@@ -149,6 +149,110 @@ export function multiRestRuns(
   return runs;
 }
 
+/** Number of flags a note carries; 0 means it is never beamed. */
+const FLAG_COUNT: Record<string, number> = {
+  eighth: 1, "16th": 2, "32nd": 3, "64th": 4, "128th": 5,
+};
+
+interface BeamMark {
+  readonly number: number;
+  readonly type: string;
+}
+
+type TimeSignature = { beats: number; beatType: number };
+
+/**
+ * How wide a beam group may be, in ticks.
+ *
+ * Read off the band's own engraved parts: in 4/4, plain quavers beam across
+ * two beats, but as soon as a semiquaver joins the run the grouping tightens
+ * to the beat — which is why a dotted quaver plus semiquaver beams on its own
+ * and the next quaver starts a fresh group. Compound metres group by the
+ * dotted beat.
+ */
+function beamGroupTicks(time: TimeSignature, hasShortNotes: boolean): number {
+  const beatTicks = (DIVISIONS * 4) / time.beatType;
+  if (time.beatType === 8 && time.beats % 3 === 0) return 3 * beatTicks;
+  if (!hasShortNotes && time.beats % 2 === 0) return 2 * beatTicks;
+  return beatTicks;
+}
+
+/**
+ * MuseScore stores beaming implicitly — it applies the metre's default rules
+ * and only records exceptions — but MusicXML needs every beam spelled out.
+ * Without this, engravers fall back to one flag per note and a run of quavers
+ * reads as a stack of isolated notes.
+ *
+ * Returns the beam elements to attach to each event, by event index.
+ */
+function beamsFor(
+  measure: Measure,
+  time: TimeSignature,
+): ReadonlyMap<number, readonly BeamMark[]> {
+  interface Slot { index: number; tick: number; flags: number }
+
+  const slots: Slot[] = [];
+  let tick = 0;
+  measure.events.forEach((event, index) => {
+    if (event.kind === "direction") return;
+    // Chord tones share the stem of the first note, which carries the beam.
+    if (event.kind === "note" && event.chordIndex > 0) return;
+    const flags = event.kind === "note" ? (FLAG_COUNT[event.durationType] ?? 0) : 0;
+    slots.push({ index, tick, flags });
+    tick += event.durationType === "measure"
+      ? measureTicks(time)
+      : ticksOf(event.durationType, event.dots, event.tuplet);
+  });
+
+  const marks = new Map<number, BeamMark[]>();
+
+  const writeGroup = (group: Slot[]): void => {
+    if (group.length < 2) return;
+    group.forEach((slot, position) => {
+      const list: BeamMark[] = [];
+      for (let level = 1; level <= slot.flags; level += 1) {
+        const previous = position > 0 && group[position - 1]!.flags >= level;
+        const next = position < group.length - 1 && group[position + 1]!.flags >= level;
+        let type: string;
+        if (previous && next) type = "continue";
+        else if (next) type = "begin";
+        else if (previous) type = "end";
+        else type = position > 0 ? "backward hook" : "forward hook";
+        list.push({ number: level, type });
+      }
+      if (list.length > 0) marks.set(slot.index, list);
+    });
+  };
+
+  const writeRun = (run: Slot[]): void => {
+    if (run.length === 0) return;
+    const width = beamGroupTicks(time, run.some((slot) => slot.flags >= 2));
+    let group: Slot[] = [];
+    let boundary = Number.POSITIVE_INFINITY;
+    for (const slot of run) {
+      if (slot.tick >= boundary) {
+        writeGroup(group);
+        group = [];
+      }
+      if (group.length === 0) boundary = (Math.floor(slot.tick / width) + 1) * width;
+      group.push(slot);
+    }
+    writeGroup(group);
+  };
+
+  let run: Slot[] = [];
+  for (const slot of slots) {
+    if (slot.flags === 0) {
+      writeRun(run);
+      run = [];
+      continue;
+    }
+    run.push(slot);
+  }
+  writeRun(run);
+  return marks;
+}
+
 export interface RewriteOptions {
   readonly part: ScorePart;
   readonly instrument: Instrument;
@@ -229,17 +333,23 @@ export function toMusicXml(options: RewriteOptions): string {
   const xml = new XmlBuilder();
 
   xml.open("score-partwise", { version: "4.0" });
-  xml.open("work").leaf("work-title", options.title).close("work");
+  // The reading belongs in the heading, not beside the staff: a part name on
+  // the score-part indents the first system and pushes the music inwards.
+  const heading = [options.title, options.partLabel].filter(Boolean).join(" — ");
+  xml.leaf("movement-title", heading);
   xml.open("identification").open("encoding")
     .leaf("software", "Tête de Moule").close("encoding").close("identification");
   xml.open("part-list").open("score-part", { id: "P1" })
-    .leaf("part-name", options.partLabel).close("score-part").close("part-list");
+    .leaf("part-name", "").close("score-part").close("part-list");
   xml.open("part", { id: "P1" });
 
   const multiRests = multiRestRuns(part.measures);
 
+  let time: TimeSignature = { beats: 4, beatType: 4 };
   let first = true;
   for (const [index, measure] of part.measures.entries()) {
+    if (measure.time) time = measure.time;
+    const beams = beamsFor(measure, time);
     xml.open("measure", { number: measure.number });
 
     const multiRest = multiRests.get(index) ?? null;
@@ -253,7 +363,6 @@ export function toMusicXml(options: RewriteOptions): string {
         xml.open("key").leaf("fifths", concertFifths + shift).close("key");
       }
       if (first || measure.time !== null) {
-        const time = measure.time ?? { beats: 4, beatType: 4 };
         xml.open("time").leaf("beats", time.beats).leaf("beat-type", time.beatType).close("time");
       }
       if (first) {
@@ -300,7 +409,7 @@ export function toMusicXml(options: RewriteOptions): string {
     }
     first = false;
 
-    for (const event of measure.events) {
+    for (const [eventIndex, event] of measure.events.entries()) {
       if (event.kind === "direction") {
         xml.open("direction", { placement: event.placement }).open("direction-type");
         if (event.dynamic) {
@@ -317,7 +426,7 @@ export function toMusicXml(options: RewriteOptions): string {
         xml.open("note");
         if (event.durationType === "measure") {
           xml.empty("rest", { measure: "yes" });
-          xml.leaf("duration", measureTicks(measure));
+          xml.leaf("duration", measureTicks(time));
         } else {
           xml.empty("rest");
           xml.leaf("duration", ticks);
@@ -328,7 +437,8 @@ export function toMusicXml(options: RewriteOptions): string {
         continue;
       }
 
-      writeNote(xml, event, options, shift, instrument, reading, valveCount);
+      writeNote(xml, event, options, shift, instrument, reading, valveCount,
+                beams.get(eventIndex) ?? []);
     }
 
     if (measure.endRepeat !== null || measure.voltaStop) {
@@ -348,8 +458,12 @@ export function toMusicXml(options: RewriteOptions): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n${xml.toString()}`;
 }
 
-function measureTicks(measure: Measure): number {
-  const time = measure.time ?? { beats: 4, beatType: 4 };
+/**
+ * Length of a full bar. The time signature is only written on the bar that
+ * changes it, so the caller carries the running one: assuming 4/4 everywhere
+ * would give a whole-bar rest the wrong duration in any other metre.
+ */
+function measureTicks(time: TimeSignature): number {
   return Math.round((DIVISIONS * 4 * time.beats) / time.beatType);
 }
 
@@ -361,6 +475,7 @@ function writeNote(
   instrument: Instrument,
   reading: Reading,
   valveCount: number,
+  beams: readonly BeamMark[],
 ): void {
   const written = writtenPitch(event.pitch, reading.transpose);
   const spelling = spell(event.tpc + shift, written);
@@ -387,6 +502,9 @@ function writeNote(
       .leaf("normal-notes", event.tuplet.normalNotes)
       .close("time-modification");
   }
+
+  // <beam> sits after time-modification and before <notations> in the schema.
+  for (const beam of beams) xml.leaf("beam", beam.type, { number: beam.number });
 
   const articulations = event.articulations
     .map((name) => ARTICULATION_NAMES[name])
