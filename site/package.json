@@ -1,18 +1,24 @@
 {
   "name": "tete-de-moule",
-  "type": "module",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check && tsc --noEmit -p tsconfig.check.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types tests/pipeline.test.ts"
   },
   "dependencies": {
     "astro": "^7.3.2",
     "fflate": "^0.8.2",
     "jspdf": "^3.0.3",
+    "svg2pdf.js": "^2.6.0",
     "verovio": "^6.3.0"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.12",
+    "typescript": "^5.9.3"
   }
 }

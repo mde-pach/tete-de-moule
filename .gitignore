@@ -1,19 +1,11 @@
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-
-# Web
 node_modules/
 dist/
 .astro/
-
-# Sorties de travail : partitions et PDF ne sont pas versionnés
-*.musicxml
-*.pdf
-*.mscz
-*.svg
-!site/public/*.svg
-
 .DS_Store
 *.log
+
+# Sheet music is copyrighted: never commit scores or generated parts.
+*.mscz
+*.mscx
+*.pdf
+*.musicxml

@@ -1,115 +1,75 @@
-# tête-de-moule
+# Tête de Moule
 
-Ajoute automatiquement les **doigtés** et les **noms de notes** sur une partition
-MuseScore, pour les cuivres à pistons en Si♭ — euphonium, saxhorn basse, baryton,
-trompette, bugle.
+Le site de la fanfare des Moules Libres et Flamboyantes.
 
-Tu donnes un `.mscz`, tu choisis ta partie, et tu récupères un PDF prêt à poser sur
-le pupitre : une page de référence avec les notes du morceau, puis ta partie seule,
-doigtée note par note.
+**https://mde-pach.github.io/tete-de-moule/**
 
-## Pourquoi
+Première brique : déposer une partition MuseScore, choisir son instrument, et
+récupérer sa partie seule avec les doigtés et le nom des notes, en PDF.
 
-Quand on débute un cuivre en fanfare, on passe les premières semaines à annoter sa
-partition au crayon avant chaque répétition. C'est long, c'est fastidieux, et c'est
-entièrement mécanique — donc automatisable.
+Tout tourne dans le navigateur. Aucune partition n'est envoyée sur un serveur,
+et il n'y a pas de compte à créer : l'instrument choisi est simplement retenu
+dans le navigateur pour la fois suivante.
 
-## Installation
+## Développement
 
 ```bash
-pip install -r requirements.txt
+cd site
+npm install
+npm run dev        # http://localhost:4321/tete-de-moule
+npm run typecheck
+npm run test
+npm run build
 ```
 
-Aucune installation de MuseScore n'est nécessaire : la gravure passe par
-[Verovio](https://www.verovio.org/).
+Le site est reconstruit et publié sur GitHub Pages à chaque push sur `main`.
 
-## Utilisation
+## Structure
 
-```bash
-# 1. voir les parties du fichier
-python3 doigtes_euphonium.py partition.mscz --lister
-
-# 2. générer le PDF et le .mscz doigtés
-python3 doigtes_euphonium.py partition.mscz --partie 4
-
-# 3. en clé de sol (lecture Si♭, courante en fanfare française)
-python3 doigtes_euphonium.py partition.mscz --partie 4 --cle sol
+```
+site/src/lib/fingering.ts    doigtés, calculés depuis la série harmonique
+site/src/lib/instruments.ts  catalogue : acoustique séparée de la lecture
+site/src/lib/musescore.ts    lecture des .mscz
+site/src/lib/musicxml.ts     réécriture d'une partie, avec les annotations
+site/src/lib/engraving.ts    gravure via Verovio (WebAssembly)
+site/src/lib/pdf.ts          export PDF
+site/src/lib/settings.ts     réglages retenus d'une visite à l'autre
+site/src/lib/messages.ts     tous les textes affichés, en français
 ```
 
-| Option | Effet |
-| --- | --- |
-| `--lister` | affiche les parties, leur clef, leur transposition, leur ambitus |
-| `--partie N` | numéro de la partie à traiter |
-| `--cle fa\|sol` | clef de lecture (`sol` ajoute le décalage d'octave, voir plus bas) |
-| `--pistons 3\|4` | avec 4 pistons, `1-3` devient `4` et `1-2-3` devient `2-4` |
-| `--sans-noms` | n'écrit que les doigtés, sans le nom des notes |
-| `--nom` | nom affiché à gauche de la portée |
-| `--tempo` | indication de tempo à afficher |
-| `--sortie` | dossier de destination |
-
-Sortie : un PDF (page de référence + la partie doigtée) et un `.mscz` ne contenant
-que ta partie, avec les doigtés comme vrais éléments MuseScore, donc éditables.
-
-## Fiches pédagogiques
-
-```bash
-cd outils
-python3 tableau_complet.py        # les 7 combinaisons sur tout l'ambitus chromatique
-python3 harmoniques.py            # pour chaque doigté, les notes qu'il permet d'obtenir
-python3 comparaison_octave.py ../partition.mscz --partie 4 --de 31 --a 34
-```
+L'interface est en français, le code est en anglais. Les chaînes destinées aux
+musiciens sont regroupées dans `messages.ts` et dans les composants, ce qui rend
+ce partage tenable.
 
 ## Comment les doigtés sont calculés
 
-Aucune table n'est codée en dur. Le tube à vide d'un instrument en Si♭ produit une
-série d'harmoniques (Si♭1, Si♭2, Fa3, Si♭3, Ré4, Fa4, Si♭4…). Chaque piston rallonge
-le tube et fait descendre la note : le 2 d'un demi-ton, le 1 d'un ton, le 3 d'un ton
-et demi, le 4 d'une quarte juste.
+Aucune table n'est codée en dur. Le tube à vide produit une série d'harmoniques ;
+chaque piston rallonge le tube et fait descendre la note (le 2 d'un demi-ton, le
+1 d'un ton, le 3 d'un ton et demi, le 4 d'une quarte). Pour une note donnée, on
+cherche l'harmonique le plus proche au-dessus, puis la combinaison qui comble
+l'écart. Prendre l'harmonique le plus proche revient à prendre la combinaison la
+plus courte, donc la plus juste.
 
-Pour une note donnée, on cherche l'harmonique le plus proche **au-dessus** d'elle,
-puis la combinaison de pistons qui comble l'écart :
-
-```
-0 → 2 → 1 → 1-2 → 2-3 → 1-3 → 1-2-3     (0 à 6 demi-tons sous l'harmonique)
-```
-
-Prendre l'harmonique le plus proche revient à prendre la combinaison la plus courte,
-donc la plus juste. Les 7e et 11e harmoniques sont exclus : ils sonnent faux sur
-l'instrument.
-
-Conséquence utile : le résultat est correct dans tous les registres sans cas
-particuliers. Un Ré grave se fait `1-3` et un Ré aigu `1`, parce qu'ils ne sont pas
-accrochés au même harmonique.
+Les doigtés se calculent toujours depuis la **hauteur réelle**, jamais depuis
+l'écriture. Une partie peut donc être réécrite dans n'importe quelle clé sans
+que les doigtés bougent.
 
 ## Le piège de l'octave
 
 Trompette et euphonium partagent les mêmes doigtés, mais pas la même écriture :
+la trompette lit une seconde majeure au-dessus du son réel, l'euphonium en clé
+de sol une neuvième majeure. Appliquer la transposition de la trompette à une
+partie d'euphonium met toutes les notes sous la portée. C'est pour ça que le
+catalogue sépare l'acoustique de la lecture.
 
-- trompette en Si♭ → lit une **seconde majeure** au-dessus du son réel
-- euphonium en clé de sol → lit une **neuvième majeure** au-dessus, soit une octave
-  de plus
+## Ce qui n'est pas encore repris
 
-Appliquer la transposition de la trompette à une partie d'euphonium affichée en clé
-de sol met toutes les notes sous la portée. C'est ce que gère `--cle sol`, et ce
-qu'illustre `outils/comparaison_octave.py`.
-
-## Savoir si une partie est déjà transposée
-
-Dans le `.mscz`, MuseScore stocke pour chaque note la hauteur réelle (`pitch`) et
-l'orthographe écrite (`tpc2`), et pour chaque partie un `transposeChromatic`. Si
-celui-ci vaut `-2`, la partie est déjà écrite pour un instrument en Si♭ : il n'y a
-rien à transposer. `--lister` affiche cette valeur pour chaque partie.
-
-À la main, dans MuseScore : le bouton *Concert Pitch*. Si les notes bougent quand on
-l'active, la partie est transposée.
-
-## Formats
-
-En entrée, `.mscz` (MuseScore 3 et 4). En sortie, PDF et `.mscz`.
-
-Les partitions ne sont pas versionnées dans ce dépôt : la plupart des arrangements
-de fanfare sont sous droits.
+Le lecteur signale dans l'interface ce qu'il ne sait pas reproduire, plutôt que
+de le laisser disparaître en silence : renvois (D.C., D.S., coda), notes
+d'ornement, deuxième voix sur la portée, changements de clé en cours de morceau,
+trilles, glissandos, arpèges. Les reprises, les voltas, les liaisons, les
+triolets et les changements d'armure ou de mesure sont, eux, repris.
 
 ## Licence
 
-MIT.
+À définir.

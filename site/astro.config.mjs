@@ -1,17 +1,18 @@
 // @ts-check
-import { defineConfig } from 'astro/config';
+import { defineConfig } from "astro/config";
 
-// Le site est publié sur GitHub Pages sous /tete-de-moule. On garde le même
-// chemin de base en développement pour que dev et prod se comportent pareil.
+// Project page on GitHub Pages: https://mde-pach.github.io/tete-de-moule/
+const REPOSITORY = "tete-de-moule";
+
 export default defineConfig({
-  site: 'https://mde-pach.github.io',
-  base: '/tete-de-moule',
-  trailingSlash: 'ignore',
-  build: { format: 'directory' },
+  site: `https://mde-pach.github.io/${REPOSITORY}`,
+  base: `/${REPOSITORY}`,
+  trailingSlash: "ignore",
+  build: { format: "directory" },
   vite: {
-    build: {
-      // verovio embarque son wasm en base64 : gros fichier, mais chargé à la demande
-      chunkSizeWarningLimit: 12000,
-    },
+    // Verovio ships a large WebAssembly payload: keep it in its own chunk so
+    // the landing page stays light and the engraver loads only on demand.
+    build: { chunkSizeWarningLimit: 4096 },
+    optimizeDeps: { exclude: ["verovio"] },
   },
 });
