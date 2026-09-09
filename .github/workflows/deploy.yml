@@ -26,11 +26,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      # `enablement: true` turns GitHub Pages on the first time this runs;
-      # without it the job fails on a repository where Pages was never set up.
+      # Pas de `enablement: true` : le GITHUB_TOKEN n'a pas le droit de creer
+      # le site Pages (Create Pages site -> "Resource not accessible by
+      # integration"). Pages doit etre active une fois a la main, dans
+      # Settings > Pages, avec Source = GitHub Actions. Cette action se
+      # contente alors de lire la configuration existante.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - run: npm install
       - run: npm run typecheck
       - run: npm run test
