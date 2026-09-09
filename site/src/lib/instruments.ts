@@ -14,6 +14,8 @@
  * trumpet's transposition instead of the euphonium's.
  */
 
+import { SLIDE } from "./fingering.ts";
+
 export type ClefSign = "F" | "G";
 
 export interface Transposition {
@@ -107,6 +109,20 @@ export const INSTRUMENTS: readonly Instrument[] = [
     comfortableRange: [50, 77],
   },
   {
+    // A tenor trombone is the same length of tubing as a euphonium, so it
+    // sounds the same harmonics; the slide simply does what the valves do.
+    id: "trombone",
+    label: "Trombone ténor",
+    family: "Cuivres graves",
+    fundamental: 34,
+    valveCounts: [SLIDE],
+    readings: [
+      { id: "bass-concert", label: "Clé de fa, en ut (son réel)", clef: "F", transpose: CONCERT },
+      { id: "treble-bflat", label: "Clé de sol, en Si♭", clef: "G", transpose: B_FLAT_NINTH },
+    ],
+    comfortableRange: [40, 69],
+  },
+  {
     id: "alto-horn",
     label: "Saxhorn alto en Mi♭",
     family: "Cuivres médiums",
@@ -128,22 +144,17 @@ export function findReading(instrument: Instrument, id: string): Reading | undef
   return instrument.readings.find((reading) => reading.id === id);
 }
 
-/** Written pitch for a sounding pitch, under a given reading. */
+/** Written pitch a player reads for a given sounding pitch. */
 export function writtenPitch(concertPitch: number, transpose: Transposition): number {
   return concertPitch - transpose.chromatic - 12 * transpose.octaveChange;
 }
 
 /**
- * How far the written key signature sits from the concert one, counted in
- * fifths. A B flat instrument writes two sharps further round the circle
- * (concert E flat, three flats, is written F major, one flat).
+ * How far the key signature moves along the circle of fifths for a given
+ * transposition. A B♭ instrument reads two sharps' worth further round, so a
+ * concert E♭ part (three flats) is written in F (one flat).
  */
 export function fifthsShift(transpose: Transposition): number {
-  // A transposition of -N semitones shifts the notation by the number of fifths
-  // that spells that interval: the tonal-pitch-class distance.
-  const FIFTHS_BY_SEMITONE: Record<number, number> = {
-    0: 0, 1: -5, 2: 2, 3: -3, 4: 4, 5: -1, 6: 6, 7: 1, 8: -4, 9: 3, 10: -2, 11: 5,
-  };
   const semitones = ((-transpose.chromatic % 12) + 12) % 12;
-  return FIFTHS_BY_SEMITONE[semitones]!;
+  return ((semitones * 7) % 12 <= 6 ? (semitones * 7) % 12 : ((semitones * 7) % 12) - 12);
 }
