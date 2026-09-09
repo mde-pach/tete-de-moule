@@ -128,11 +128,13 @@ select:focus-visible, button:focus-visible, .dropzone:focus-visible {
 .preview__page { flex: 0 0 100%; scroll-snap-align: start; border: 1px solid var(--shell-200); border-radius: 6px; overflow: hidden; background: #fff; }
 .preview__page svg { display: block; width: 100%; height: auto; }
 
-/* One row per score: pick it, download it, drop it. */
+/* One row per score: its own part, its own PDF. */
 .sheets { display: grid; gap: 0.5rem; }
-.sheet { display: flex; align-items: stretch; gap: 0.5rem; background: #fff; border: 1px solid var(--shell-200); border-radius: var(--radius); padding: 0.5rem; }
+.sheet { display: grid; gap: 0.5rem; background: #fff; border: 1px solid var(--shell-200); border-radius: var(--radius); padding: 0.6rem; }
 .sheet--active { border-color: var(--accent); background: var(--accent-soft); }
-.sheet__pick { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; background: none; border: 0; padding: 0.3rem 0.4rem; text-align: left; cursor: pointer; color: inherit; font-family: inherit; font-size: inherit; }
+.sheet__controls { display: flex; align-items: center; gap: 0.5rem; }
+.sheet__part { flex: 1; min-width: 0; padding: 0.4rem 0.5rem; font-size: 0.88rem; }
+.sheet__pick { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; background: none; border: 0; padding: 0.3rem 0.4rem; text-align: left; cursor: pointer; color: inherit; font-family: inherit; font-size: inherit; }
 .sheet__name { font-family: var(--font-ui); font-weight: 640; }
 .sheet__detail { font-size: 0.82rem; color: var(--shell-600); }
 .sheet__action { padding: 0.35rem 0.8rem; font-size: 0.85rem; }
