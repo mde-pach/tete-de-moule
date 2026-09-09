@@ -119,9 +119,24 @@ select:focus-visible, button:focus-visible, .dropzone:focus-visible {
 @media (min-width: 62rem) { .workbench { grid-template-columns: 21rem 1fr; } }
 
 .preview { background: #fff; border: 1px solid var(--shell-200); border-radius: var(--radius-lg); padding: 1rem; overflow: hidden; }
-.preview__pages { display: grid; gap: 1rem; max-height: 74vh; overflow-y: auto; }
-.preview__page { border: 1px solid var(--shell-200); border-radius: 6px; overflow: hidden; background: #fff; }
+.preview__bar { display: flex; align-items: center; justify-content: center; gap: 0.8rem; margin-bottom: 0.7rem; }
+.preview__arrow { padding: 0.2rem 0.7rem; font-size: 1.2rem; line-height: 1; }
+.preview__arrow:disabled { opacity: 0.35; cursor: default; }
+/* One page at a time: arrows on a desktop, a swipe on a phone. */
+.preview__pages { display: flex; gap: 1rem; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
+.preview__pages::-webkit-scrollbar { display: none; }
+.preview__page { flex: 0 0 100%; scroll-snap-align: start; border: 1px solid var(--shell-200); border-radius: 6px; overflow: hidden; background: #fff; }
 .preview__page svg { display: block; width: 100%; height: auto; }
+
+/* One row per score: pick it, download it, drop it. */
+.sheets { display: grid; gap: 0.5rem; }
+.sheet { display: flex; align-items: stretch; gap: 0.5rem; background: #fff; border: 1px solid var(--shell-200); border-radius: var(--radius); padding: 0.5rem; }
+.sheet--active { border-color: var(--accent); background: var(--accent-soft); }
+.sheet__pick { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; background: none; border: 0; padding: 0.3rem 0.4rem; text-align: left; cursor: pointer; color: inherit; font-family: inherit; font-size: inherit; }
+.sheet__name { font-family: var(--font-ui); font-weight: 640; }
+.sheet__detail { font-size: 0.82rem; color: var(--shell-600); }
+.sheet__action { padding: 0.35rem 0.8rem; font-size: 0.85rem; }
+.sheet__action:disabled { opacity: 0.45; cursor: default; }
 
 .notice { border-radius: var(--radius); padding: 0.8rem 1rem; font-size: 0.9rem; font-family: var(--font-ui); }
 .notice--warn { background: var(--accent-soft); color: #8a3b12; }

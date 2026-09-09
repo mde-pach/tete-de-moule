@@ -61,21 +61,29 @@ import { INSTRUMENTS } from "../lib/instruments.ts";
 
         <div class="stack" style="--gap: 1rem">
           <div id="dropzone" class="dropzone" tabindex="0" role="button"
-               aria-label="Choisir une partition MuseScore">
-            <p class="dropzone__title">Dépose ta partition ici</p>
-            <p class="muted small" style="margin:0">.mscz — ou clique pour choisir</p>
-            <input type="file" id="file" accept=".mscz,.mscx" class="hidden" />
+               aria-label="Choisir une ou plusieurs partitions MuseScore">
+            <p class="dropzone__title">Dépose tes partitions ici</p>
+            <p class="muted small" style="margin:0">.mscz — une ou plusieurs, ou clique pour choisir</p>
+            <input type="file" id="file" accept=".mscz,.mscx" multiple class="hidden" />
           </div>
 
           <div id="messages" class="stack" style="--gap: 0.6rem"></div>
 
+          <div id="sheets" class="sheets hidden"></div>
+
           <div id="actions" class="button-row hidden">
-            <button class="button button--accent" id="download" type="button">Télécharger le PDF</button>
-            <button class="button button--quiet" id="reset" type="button">Changer de partition</button>
+            <button class="button button--quiet" id="reset" type="button">Tout effacer</button>
             <span class="small muted" id="status"></span>
           </div>
 
           <div id="preview" class="preview hidden">
+            <div class="preview__bar">
+              <button class="button button--quiet preview__arrow" id="page-prev" type="button"
+                      aria-label="Page précédente">‹</button>
+              <span class="small muted" id="page-counter"></span>
+              <button class="button button--quiet preview__arrow" id="page-next" type="button"
+                      aria-label="Page suivante">›</button>
+            </div>
             <div class="preview__pages" id="pages"></div>
           </div>
         </div>
