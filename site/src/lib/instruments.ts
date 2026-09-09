@@ -1,141 +1,149 @@
 /**
- * Catalogue des instruments.
+ * Instrument catalogue.
  *
- * Deux choses distinctes sont décrites ici, et il faut les garder séparées :
+ * Two things are kept deliberately separate:
  *
- *  - l'ACOUSTIQUE (`fondamentale`, `partiels`, `pistons`) : elle détermine les
- *    doigtés, et ne dépend que du son réel produit, jamais de l'écriture.
- *  - les LECTURES (`lectures`) : la façon dont la partie est écrite sur le
- *    papier. Un même euphonium se lit en clé de fa non transposée, en clé de fa
- *    en Si bémol, ou en clé de sol en Si bémol. Cela ne change aucun doigté.
+ *  - the *acoustics* (`fundamental`, `valveCount`), which decide the fingerings
+ *    and depend only on the length of tubing;
+ *  - the *reading* (`clef`, `transpose`), which decides how the part is written
+ *    on the page.
+ *
+ * They are independent: the same euphonium fingerings apply whether the part is
+ * printed in bass clef or in treble clef. Keeping them apart is what stops the
+ * classic octave mistake, where treble-clef notation is applied with the
+ * trumpet's transposition instead of the euphonium's.
  */
 
-export type Cle = 'sol' | 'fa';
+export type ClefSign = "F" | "G";
 
-export interface Lecture {
-  id: string;
-  nom: string;
-  cle: Cle;
-  /** Son réel = note écrite + transposition (en demi-tons). */
-  transposition: number;
-  /** Quintes à ajouter à l'armure réelle pour obtenir l'armure écrite. */
-  quintes: number;
+export interface Transposition {
+  /** Sounding pitch = written pitch + chromatic (+ 12 * octaveChange). */
+  readonly chromatic: number;
+  readonly diatonic: number;
+  readonly octaveChange: number;
+}
+
+export interface Reading {
+  readonly id: string;
+  /** Shown in the interface, in French. */
+  readonly label: string;
+  readonly clef: ClefSign;
+  readonly transpose: Transposition;
 }
 
 export interface Instrument {
-  id: string;
-  nom: string;
-  /** Nom court, pour la pastille d'en-tête. */
-  court: string;
-  famille: string;
-  /** Son réel du tube à vide, en MIDI (harmonique 1). */
-  fondamentale: number;
-  /** Numéros d'harmoniques réellement jouables. Les 7e et 11e sonnent faux. */
-  partiels: number[];
-  /** Nombres de pistons proposés. Le premier est la valeur par défaut. */
-  pistons: number[];
-  lectures: Lecture[];
+  readonly id: string;
+  /** Shown in the interface, in French. */
+  readonly label: string;
+  readonly family: string;
+  /** Concert MIDI pitch of the first harmonic of the open tube. */
+  readonly fundamental: number;
+  readonly valveCounts: readonly number[];
+  readonly readings: readonly Reading[];
+  /** Typical sounding range, used to guess which part belongs to the player. */
+  readonly comfortableRange: readonly [number, number];
 }
 
-// Lectures réutilisables ------------------------------------------------------
-const FA_UT: Lecture = {
-  id: 'fa-ut', nom: 'Clé de fa, non transposée', cle: 'fa', transposition: 0, quintes: 0,
-};
-const FA_SIB: Lecture = {
-  id: 'fa-sib', nom: 'Clé de fa, en Si\u266d', cle: 'fa', transposition: -2, quintes: 2,
-};
-const SOL_SIB: Lecture = {
-  id: 'sol-sib', nom: 'Clé de sol, en Si\u266d', cle: 'sol', transposition: -14, quintes: 2,
-};
-const SOL_SIB_AIGU: Lecture = {
-  id: 'sol-sib-aigu', nom: 'Clé de sol, en Si\u266d', cle: 'sol', transposition: -2, quintes: 2,
-};
-const SOL_MIB: Lecture = {
-  id: 'sol-mib', nom: 'Clé de sol, en Mi\u266d', cle: 'sol', transposition: -9, quintes: 3,
-};
+const CONCERT: Transposition = { chromatic: 0, diatonic: 0, octaveChange: 0 };
+const B_FLAT: Transposition = { chromatic: -2, diatonic: -1, octaveChange: 0 };
+const B_FLAT_NINTH: Transposition = { chromatic: -2, diatonic: -1, octaveChange: -1 };
+const E_FLAT_SIXTH: Transposition = { chromatic: -9, diatonic: -5, octaveChange: 0 };
+const E_FLAT_THIRTEENTH: Transposition = { chromatic: -9, diatonic: -5, octaveChange: -1 };
 
-/** Harmoniques exploitables sur un cuivre : ni le 7e ni le 11e, faux par nature. */
-const PARTIELS_LARGES = [2, 3, 4, 5, 6, 8, 9, 10, 12];
-const PARTIELS_MOYENS = [2, 3, 4, 5, 6, 8];
-const PARTIELS_COURTS = [2, 3, 4, 5, 6];
+const B_FLAT_READINGS: Reading[] = [
+  { id: "bass-bflat", label: "Clé de fa, transposée en Si♭", clef: "F", transpose: B_FLAT },
+  { id: "bass-concert", label: "Clé de fa, en ut (son réel)", clef: "F", transpose: CONCERT },
+  { id: "treble-bflat", label: "Clé de sol, en Si♭", clef: "G", transpose: B_FLAT_NINTH },
+];
 
-export const INSTRUMENTS: Instrument[] = [
+export const INSTRUMENTS: readonly Instrument[] = [
   {
-    id: 'euphonium',
-    nom: 'Euphonium / saxhorn basse en Si\u266d',
-    court: 'Euphonium',
-    famille: 'Basses',
-    fondamentale: 34,
-    partiels: PARTIELS_LARGES,
-    pistons: [3, 4],
-    lectures: [FA_SIB, FA_UT, SOL_SIB],
+    id: "euphonium",
+    label: "Euphonium / saxhorn basse en Si♭",
+    family: "Cuivres graves",
+    fundamental: 34,
+    valveCounts: [3, 4],
+    readings: B_FLAT_READINGS,
+    comfortableRange: [36, 65],
   },
   {
-    id: 'baryton',
-    nom: 'Saxhorn baryton en Si\u266d',
-    court: 'Baryton',
-    famille: 'Basses',
-    fondamentale: 34,
-    partiels: PARTIELS_LARGES,
-    pistons: [3, 4],
-    lectures: [FA_SIB, FA_UT, SOL_SIB],
+    id: "baritone",
+    label: "Baryton en Si♭",
+    family: "Cuivres graves",
+    fundamental: 34,
+    valveCounts: [3, 4],
+    readings: B_FLAT_READINGS,
+    comfortableRange: [38, 67],
   },
   {
-    id: 'soubassophone',
-    nom: 'Soubassophone / tuba en Si\u266d',
-    court: 'Soubasse',
-    famille: 'Basses',
-    fondamentale: 22,
-    partiels: PARTIELS_LARGES,
-    pistons: [3, 4],
-    lectures: [FA_UT, FA_SIB, SOL_SIB],
+    id: "tuba-bflat",
+    label: "Tuba / sousaphone en Si♭",
+    family: "Cuivres graves",
+    fundamental: 22,
+    valveCounts: [3, 4],
+    readings: B_FLAT_READINGS,
+    comfortableRange: [28, 58],
   },
   {
-    id: 'tuba-mib',
-    nom: 'Tuba en Mi\u266d',
-    court: 'Tuba Mi\u266d',
-    famille: 'Basses',
-    fondamentale: 27,
-    partiels: PARTIELS_LARGES,
-    pistons: [3, 4],
-    lectures: [FA_UT, SOL_MIB],
+    id: "trumpet-bflat",
+    label: "Trompette en Si♭",
+    family: "Cuivres aigus",
+    fundamental: 34,
+    valveCounts: [3],
+    readings: [
+      { id: "treble-bflat", label: "Clé de sol, en Si♭", clef: "G", transpose: B_FLAT },
+    ],
+    comfortableRange: [52, 82],
   },
   {
-    id: 'trompette',
-    nom: 'Trompette en Si\u266d',
-    court: 'Trompette',
-    famille: 'Aigus',
-    fondamentale: 46,
-    partiels: PARTIELS_MOYENS,
-    pistons: [3],
-    lectures: [SOL_SIB_AIGU],
+    id: "flugelhorn",
+    label: "Bugle en Si♭",
+    family: "Cuivres aigus",
+    fundamental: 34,
+    valveCounts: [3],
+    readings: [
+      { id: "treble-bflat", label: "Clé de sol, en Si♭", clef: "G", transpose: B_FLAT },
+    ],
+    comfortableRange: [50, 77],
   },
   {
-    id: 'bugle',
-    nom: 'Bugle en Si\u266d',
-    court: 'Bugle',
-    famille: 'Aigus',
-    fondamentale: 46,
-    partiels: PARTIELS_COURTS,
-    pistons: [3],
-    lectures: [SOL_SIB_AIGU],
-  },
-  {
-    id: 'saxhorn-alto',
-    nom: 'Saxhorn alto en Mi\u266d',
-    court: 'Alto',
-    famille: 'Aigus',
-    fondamentale: 39,
-    partiels: PARTIELS_MOYENS,
-    pistons: [3],
-    lectures: [SOL_MIB],
+    id: "alto-horn",
+    label: "Saxhorn alto en Mi♭",
+    family: "Cuivres médiums",
+    fundamental: 27,
+    valveCounts: [3],
+    readings: [
+      { id: "treble-eflat", label: "Clé de sol, en Mi♭", clef: "G", transpose: E_FLAT_SIXTH },
+      { id: "treble-eflat-low", label: "Clé de sol, en Mi♭ (octave grave)", clef: "G", transpose: E_FLAT_THIRTEENTH },
+    ],
+    comfortableRange: [45, 72],
   },
 ];
 
-export function instrumentParId(id: string): Instrument | undefined {
-  return INSTRUMENTS.find((i) => i.id === id);
+export function findInstrument(id: string): Instrument | undefined {
+  return INSTRUMENTS.find((instrument) => instrument.id === id);
 }
 
-export function lectureParId(instrument: Instrument, id: string): Lecture | undefined {
-  return instrument.lectures.find((l) => l.id === id);
+export function findReading(instrument: Instrument, id: string): Reading | undefined {
+  return instrument.readings.find((reading) => reading.id === id);
+}
+
+/** Written pitch for a sounding pitch, under a given reading. */
+export function writtenPitch(concertPitch: number, transpose: Transposition): number {
+  return concertPitch - transpose.chromatic - 12 * transpose.octaveChange;
+}
+
+/**
+ * How far the written key signature sits from the concert one, counted in
+ * fifths. A B flat instrument writes two sharps further round the circle
+ * (concert E flat, three flats, is written F major, one flat).
+ */
+export function fifthsShift(transpose: Transposition): number {
+  // A transposition of -N semitones shifts the notation by the number of fifths
+  // that spells that interval: the tonal-pitch-class distance.
+  const FIFTHS_BY_SEMITONE: Record<number, number> = {
+    0: 0, 1: -5, 2: 2, 3: -3, 4: 4, 5: -1, 6: 6, 7: 1, 8: -4, 9: 3, 10: -2, 11: 5,
+  };
+  const semitones = ((-transpose.chromatic % 12) + 12) % 12;
+  return FIFTHS_BY_SEMITONE[semitones]!;
 }
