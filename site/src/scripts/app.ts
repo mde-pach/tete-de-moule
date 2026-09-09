@@ -1,8 +1,10 @@
 /**
  * Wiring for the fingering workbench.
  *
- * The flow is deliberately short: drop a file, confirm the part, get a PDF.
- * Settings are restored on load so a returning player only does step one.
+ * A player brings a folder, not one piece: several scores are held at once,
+ * each keeping its own chosen part. The settings on the left are shared,
+ * because they describe the player rather than the music — pick your
+ * instrument once and every score follows.
  */
 import { engrave } from "../lib/engraving.ts";
 import {
@@ -32,21 +34,40 @@ const instrumentHint = element<HTMLElement>("instrument-hint");
 const dropzone = element<HTMLElement>("dropzone");
 const fileInput = element<HTMLInputElement>("file");
 const messages = element<HTMLElement>("messages");
+const sheetList = element<HTMLElement>("sheets");
 const actions = element<HTMLElement>("actions");
 const preview = element<HTMLElement>("preview");
-const pages = element<HTMLElement>("pages");
+const pagesBox = element<HTMLElement>("pages");
+const pageCounter = element<HTMLElement>("page-counter");
+const previousPageButton = element<HTMLButtonElement>("page-prev");
+const nextPageButton = element<HTMLButtonElement>("page-next");
 const status = element<HTMLElement>("status");
-const downloadButton = element<HTMLButtonElement>("download");
 const resetButton = element<HTMLButtonElement>("reset");
 const fingeringToggle = element<HTMLInputElement>("show-fingerings");
 const noteNameToggle = element<HTMLInputElement>("show-note-names");
 const measureNumberToggle = element<HTMLInputElement>("show-measure-numbers");
 
+type SheetState = "pending" | "ready" | "failed";
+
+interface Sheet {
+  /** File name without its extension; also the name of the PDF. */
+  readonly name: string;
+  readonly score: ParsedScore;
+  /** Every score gets its own part: the player's line is not the same index. */
+  partIndex: number;
+  pages: string[];
+  state: SheetState;
+  problem: string;
+}
+
 let settings: Settings = loadSettings();
-let score: ParsedScore | null = null;
-let sourceName = "partition";
-let renderedPages: string[] = [];
-let renderToken = 0;
+let sheets: Sheet[] = [];
+let active = 0;
+/**
+ * Bumped whenever the settings change. Engraving walks the folder one score at
+ * a time, so a pass left behind has to notice it is stale and stand down.
+ */
+let generation = 0;
 
 function currentInstrument(): Instrument {
   return findInstrument(settings.instrumentId) ?? INSTRUMENTS[0]!;
@@ -57,6 +78,17 @@ function currentReading(): Reading {
   return findReading(instrument, settings.readingId) ?? instrument.readings[0]!;
 }
 
+function activeSheet(): Sheet | null {
+  return sheets[active] ?? null;
+}
+
+function partOf(sheet: Sheet): ScorePart | null {
+  return sheet.score.parts[sheet.partIndex] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Settings panel
+// ---------------------------------------------------------------------------
 function fillReadings(): void {
   const instrument = currentInstrument();
   readingSelect.innerHTML = "";
@@ -75,7 +107,7 @@ function fillReadings(): void {
   for (const count of instrument.valveCounts) {
     const option = document.createElement("option");
     option.value = String(count);
-    option.textContent = `${count} pistons`;
+    option.textContent = count === 0 ? "Coulisse" : `${count} pistons`;
     valveSelect.append(option);
   }
   if (!instrument.valveCounts.includes(settings.valveCount)) {
@@ -104,32 +136,33 @@ function guessPart(parsed: ParsedScore, instrument: Instrument): number {
   return bestIndex;
 }
 
-function fillParts(parsed: ParsedScore): void {
+function fillParts(): void {
+  const sheet = activeSheet();
   partSelect.innerHTML = "";
-  parsed.parts.forEach((part, index) => {
+  if (!sheet) {
+    partField.classList.add("hidden");
+    partHint.textContent = "";
+    return;
+  }
+  sheet.score.parts.forEach((part, index) => {
     const option = document.createElement("option");
     option.value = String(index);
     option.textContent = `${part.name}${part.noteCount ? "" : " (vide)"}`;
     option.disabled = part.noteCount === 0;
     partSelect.append(option);
   });
-  partSelect.value = String(guessPart(parsed, currentInstrument()));
+  partSelect.value = String(sheet.partIndex);
   partField.classList.remove("hidden");
-  updatePartHint();
-}
 
-function updatePartHint(): void {
-  const part = selectedPart();
+  const part = partOf(sheet);
   partHint.textContent = part?.range
     ? `${part.noteCount} notes, de ${describeRange(part.range[0], part.range[1])} en son réel.`
     : "";
 }
 
-function selectedPart(): ScorePart | null {
-  if (!score) return null;
-  return score.parts[Number(partSelect.value)] ?? null;
-}
-
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 function showMessage(kind: "warn" | "error", title: string, items: string[] = []): void {
   const box = document.createElement("div");
   box.className = `notice notice--${kind}`;
@@ -148,101 +181,303 @@ function showMessage(kind: "warn" | "error", title: string, items: string[] = []
   messages.append(box);
 }
 
-function clearMessages(): void {
+/** Warnings belong to a score, so they are redrawn when the selection moves. */
+function renderMessages(): void {
   messages.innerHTML = "";
+  const sheet = activeSheet();
+  if (!sheet || sheet.score.warnings.size === 0) return;
+  showMessage(
+    "warn",
+    `${sheet.name} : certains éléments ne sont pas repris à l'identique.`,
+    [...sheet.score.warnings].map((code) => UNSUPPORTED_LABELS[code]),
+  );
 }
 
-async function handleFile(file: File): Promise<void> {
-  clearMessages();
-  sourceName = file.name.replace(/\.(mscz|mscx)$/i, "") || "partition";
+// ---------------------------------------------------------------------------
+// The list of scores
+// ---------------------------------------------------------------------------
+function stateLabel(sheet: Sheet): string {
+  if (sheet.state === "failed") return sheet.problem;
+  if (sheet.state === "pending") return "Gravure…";
+  return `${sheet.pages.length} page${sheet.pages.length > 1 ? "s" : ""}`;
+}
+
+function renderSheets(): void {
+  sheetList.innerHTML = "";
+  sheets.forEach((sheet, index) => {
+    const row = document.createElement("div");
+    row.className = "sheet" + (index === active ? " sheet--active" : "");
+
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "sheet__pick";
+    pick.setAttribute("aria-pressed", String(index === active));
+    const title = document.createElement("span");
+    title.className = "sheet__name";
+    title.textContent = sheet.name;
+    const detail = document.createElement("span");
+    detail.className = "sheet__detail";
+    detail.textContent = `${partOf(sheet)?.name ?? "—"} · ${stateLabel(sheet)}`;
+    pick.append(title, detail);
+    pick.addEventListener("click", () => select(index));
+
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "button button--accent sheet__action";
+    download.textContent = "PDF";
+    download.disabled = sheet.state !== "ready";
+    download.addEventListener("click", () => void downloadSheet(sheet));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "button button--quiet sheet__action";
+    remove.textContent = "✕";
+    remove.setAttribute("aria-label", `Retirer ${sheet.name}`);
+    remove.addEventListener("click", () => removeSheet(index));
+
+    row.append(pick, download, remove);
+    sheetList.append(row);
+  });
+  sheetList.classList.toggle("hidden", sheets.length === 0);
+  actions.classList.toggle("hidden", sheets.length === 0);
+}
+
+function select(index: number): void {
+  if (index === active || !sheets[index]) return;
+  active = index;
+  fillParts();
+  renderMessages();
+  renderSheets();
+  showPages();
+}
+
+function removeSheet(index: number): void {
+  sheets.splice(index, 1);
+  if (active >= sheets.length) active = Math.max(0, sheets.length - 1);
+  fillParts();
+  renderMessages();
+  renderSheets();
+  showPages();
+}
+
+// ---------------------------------------------------------------------------
+// Viewer: one page at a time, arrows on a desktop, a swipe on a phone
+// ---------------------------------------------------------------------------
+function showPages(): void {
+  const sheet = activeSheet();
+  pagesBox.innerHTML = "";
+  if (!sheet || sheet.state !== "ready" || sheet.pages.length === 0) {
+    preview.classList.add("hidden");
+    updateCounter();
+    return;
+  }
+  for (const svg of sheet.pages) {
+    const holder = document.createElement("div");
+    holder.className = "preview__page";
+    holder.innerHTML = svg;
+    pagesBox.append(holder);
+  }
+  preview.classList.remove("hidden");
+  pagesBox.scrollTo({ left: 0 });
+  updateCounter();
+}
+
+/**
+ * Where each page starts, measured from the pages themselves rather than from
+ * the container width: the gap between them makes those two drift a little
+ * further apart with every page.
+ */
+function pageOffsets(): number[] {
+  const children = [...pagesBox.children] as HTMLElement[];
+  if (children.length === 0) return [];
+  const origin = children[0]!.offsetLeft;
+  return children.map((child) => child.offsetLeft - origin);
+}
+
+function pageIndex(): number {
+  const offsets = pageOffsets();
+  if (offsets.length === 0) return 0;
+  let best = 0;
+  let bestDistance = Infinity;
+  offsets.forEach((offset, index) => {
+    const distance = Math.abs(offset - pagesBox.scrollLeft);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  });
+  return best;
+}
+
+function updateCounter(): void {
+  const total = activeSheet()?.pages.length ?? 0;
+  const current = total ? pageIndex() + 1 : 0;
+  pageCounter.textContent = total ? `Page ${current} / ${total}` : "";
+  previousPageButton.disabled = current <= 1;
+  nextPageButton.disabled = current === 0 || current >= total;
+}
+
+function turnPage(delta: number): void {
+  const offsets = pageOffsets();
+  const target = Math.min(Math.max(pageIndex() + delta, 0), offsets.length - 1);
+  const left = offsets[target];
+  if (left === undefined) return;
+  pagesBox.scrollTo({ left, behavior: "smooth" });
+}
+
+// ---------------------------------------------------------------------------
+// Engraving
+// ---------------------------------------------------------------------------
+function buildMusicXml(sheet: Sheet): string | null {
+  const part = partOf(sheet);
+  if (!part) return null;
+  const reading = currentReading();
+  return toMusicXml({
+    part,
+    instrument: currentInstrument(),
+    reading,
+    valveCount: settings.valveCount,
+    showFingerings: settings.showFingerings,
+    showNoteNames: settings.showNoteNames,
+    title: sheet.score.title || sheet.name,
+    partLabel: `${part.name} — ${reading.label}`.replace(/[♭♯]/g, (sign) => (sign === "♭" ? "b" : "#")),
+    tempoBpm: sheet.score.tempoBpm,
+  });
+}
+
+async function engraveSheet(sheet: Sheet, token: number): Promise<void> {
+  const musicXml = buildMusicXml(sheet);
+  if (!musicXml) {
+    sheet.state = "failed";
+    sheet.problem = "partie vide";
+    return;
+  }
+  try {
+    const svgPages = await engrave(musicXml, {
+      showMeasureNumbers: settings.showMeasureNumbers,
+    });
+    if (token !== generation) return;
+    sheet.pages = svgPages;
+    sheet.state = "ready";
+    sheet.problem = "";
+  } catch (error) {
+    if (token !== generation) return;
+    sheet.pages = [];
+    sheet.state = "failed";
+    sheet.problem = error instanceof Error ? error.message : "gravure impossible";
+  }
+}
+
+/**
+ * Re-engraves everything, active score first, so the viewer fills straight
+ * away while the rest of the folder catches up behind it.
+ */
+async function refresh(): Promise<void> {
+  if (sheets.length === 0) {
+    status.textContent = "";
+    renderSheets();
+    showPages();
+    return;
+  }
+  const token = ++generation;
+  for (const sheet of sheets) {
+    sheet.state = "pending";
+    sheet.pages = [];
+  }
+  renderSheets();
+  showPages();
+
+  const order = [active, ...sheets.map((_, index) => index)];
+  const seen = new Set<number>();
+  let done = 0;
+  for (const index of order) {
+    if (seen.has(index)) continue;
+    seen.add(index);
+    if (token !== generation) return;
+    const sheet = sheets[index];
+    if (!sheet) continue;
+
+    done += 1;
+    status.innerHTML =
+      `<span class="spinner"></span> Gravure ${done} / ${sheets.length}…`;
+    await engraveSheet(sheet, token);
+    if (token !== generation) return;
+    renderSheets();
+    if (index === active) showPages();
+  }
   status.textContent = "";
+}
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+async function readSheet(file: File): Promise<Sheet | string> {
+  const name = file.name.replace(/\.(mscz|mscx)$/i, "") || "partition";
   try {
     const buffer = new Uint8Array(await file.arrayBuffer());
     const mscx = file.name.toLowerCase().endsWith(".mscx")
       ? new TextDecoder().decode(buffer)
       : extractMscx(buffer);
-    score = parseScore(mscx);
+    const parsed = parseScore(mscx);
+    return {
+      name,
+      score: parsed,
+      partIndex: guessPart(parsed, currentInstrument()),
+      pages: [],
+      state: "pending",
+      problem: "",
+    };
   } catch (error) {
-    score = null;
-    showMessage("error", error instanceof Error ? error.message : "Fichier illisible.");
-    return;
+    return `${name} : ${error instanceof Error ? error.message : "fichier illisible"}`;
   }
-  fillParts(score);
-  if (score.warnings.size) {
+}
+
+async function handleFiles(files: FileList | File[]): Promise<void> {
+  const incoming = [...files];
+  if (incoming.length === 0) return;
+  const failures: string[] = [];
+  const added: Sheet[] = [];
+  for (const file of incoming) {
+    const result = await readSheet(file);
+    if (typeof result === "string") failures.push(result);
+    else added.push(result);
+  }
+  if (added.length) {
+    const firstNew = sheets.length;
+    sheets = [...sheets, ...added];
+    active = firstNew;
+  }
+  fillParts();
+  renderMessages();
+  if (failures.length) {
     showMessage(
-      "warn",
-      "Certains éléments ne sont pas repris à l'identique :",
-      [...score.warnings].map((code) => UNSUPPORTED_LABELS[code]),
+      "error",
+      failures.length > 1 ? "Fichiers illisibles :" : "Fichier illisible :",
+      failures,
     );
   }
-  await render();
+  await refresh();
 }
 
-function buildMusicXml(): string | null {
-  const part = selectedPart();
-  if (!score || !part) return null;
-  const instrument = currentInstrument();
-  const reading = currentReading();
-  return toMusicXml({
-    part,
-    instrument,
-    reading,
-    valveCount: settings.valveCount,
-    showFingerings: settings.showFingerings,
-    showNoteNames: settings.showNoteNames,
-    title: score.title || sourceName,
-    partLabel: `${part.name} — ${reading.label}`.replace(/[♭♯]/g, (sign) => (sign === "♭" ? "b" : "#")),
-    tempoBpm: score.tempoBpm,
-  });
-}
-
-async function render(): Promise<void> {
-  const musicXml = buildMusicXml();
-  if (!musicXml) return;
-  const token = ++renderToken;
-  status.innerHTML = '<span class="spinner"></span> Gravure en cours…';
-  actions.classList.remove("hidden");
-  downloadButton.disabled = true;
+// ---------------------------------------------------------------------------
+// Download
+// ---------------------------------------------------------------------------
+async function downloadSheet(sheet: Sheet): Promise<void> {
+  if (sheet.state !== "ready" || sheet.pages.length === 0) return;
+  status.innerHTML = `<span class="spinner"></span> PDF de ${sheet.name}…`;
   try {
-    const svgPages = await engrave(musicXml, {
-      showMeasureNumbers: settings.showMeasureNumbers,
-    });
-    if (token !== renderToken) return;
-    renderedPages = svgPages;
-    pages.innerHTML = "";
-    for (const svg of svgPages) {
-      const holder = document.createElement("div");
-      holder.className = "preview__page";
-      holder.innerHTML = svg;
-      pages.append(holder);
-    }
-    preview.classList.remove("hidden");
-    status.textContent = `${svgPages.length} page${svgPages.length > 1 ? "s" : ""}`;
-    downloadButton.disabled = false;
-  } catch (error) {
-    if (token !== renderToken) return;
-    status.textContent = "";
-    showMessage("error", error instanceof Error ? error.message : "Gravure impossible.");
-  }
-}
-
-async function download(): Promise<void> {
-  if (!renderedPages.length) return;
-  downloadButton.disabled = true;
-  status.innerHTML = '<span class="spinner"></span> Préparation du PDF…';
-  try {
-    const { blob, mode } = await pagesToPdf(renderedPages);
-    const reading = currentReading();
-    downloadBlob(blob, `${sourceName} — ${reading.id}.pdf`);
+    const { blob, mode } = await pagesToPdf(sheet.pages);
+    downloadBlob(blob, `${sheet.name} — ${currentReading().id}.pdf`);
     status.textContent = mode === "raster" ? "PDF prêt (rendu image)." : "PDF prêt.";
   } catch (error) {
     showMessage("error", error instanceof Error ? error.message : "Export PDF impossible.");
     status.textContent = "";
-  } finally {
-    downloadButton.disabled = false;
   }
 }
 
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
 function persist(): void {
   saveSettings(settings);
   instrumentHint.textContent = "Retenu pour la prochaine fois.";
@@ -260,21 +495,24 @@ function bind(): void {
     settings.readingId = "";
     fillReadings();
     persist();
-    if (score) partSelect.value = String(guessPart(score, currentInstrument()));
-    updatePartHint();
-    void render();
+    // Another instrument means another line, in every score.
+    for (const sheet of sheets) {
+      sheet.partIndex = guessPart(sheet.score, currentInstrument());
+    }
+    fillParts();
+    void refresh();
   });
 
   readingSelect.addEventListener("change", () => {
     settings.readingId = readingSelect.value;
     persist();
-    void render();
+    void refresh();
   });
 
   valveSelect.addEventListener("change", () => {
     settings.valveCount = Number(valveSelect.value);
     persist();
-    void render();
+    void refresh();
   });
 
   for (const [input, key] of [
@@ -285,13 +523,16 @@ function bind(): void {
     input.addEventListener("change", () => {
       settings = { ...settings, [key]: input.checked };
       persist();
-      void render();
+      void refresh();
     });
   }
 
   partSelect.addEventListener("change", () => {
-    updatePartHint();
-    void render();
+    const sheet = activeSheet();
+    if (!sheet) return;
+    sheet.partIndex = Number(partSelect.value);
+    fillParts();
+    void refresh();
   });
 
   dropzone.addEventListener("click", () => fileInput.click());
@@ -311,24 +552,31 @@ function bind(): void {
   dropzone.addEventListener("drop", (event) => {
     event.preventDefault();
     delete dropzone.dataset.active;
-    const file = event.dataTransfer?.files?.[0];
-    if (file) void handleFile(file);
+    const dropped = event.dataTransfer?.files;
+    if (dropped?.length) void handleFiles(dropped);
   });
   fileInput.addEventListener("change", () => {
-    const file = fileInput.files?.[0];
-    if (file) void handleFile(file);
+    const chosen = fileInput.files;
+    if (chosen?.length) void handleFiles(chosen);
+    // Cleared so the same file can be picked again after being removed.
+    fileInput.value = "";
   });
 
-  downloadButton.addEventListener("click", () => void download());
+  previousPageButton.addEventListener("click", () => turnPage(-1));
+  nextPageButton.addEventListener("click", () => turnPage(1));
+  pagesBox.addEventListener("scroll", updateCounter, { passive: true });
+  window.addEventListener("resize", updateCounter);
+
   resetButton.addEventListener("click", () => {
-    score = null;
-    renderedPages = [];
+    generation += 1;
+    sheets = [];
+    active = 0;
     fileInput.value = "";
-    pages.innerHTML = "";
-    preview.classList.add("hidden");
-    actions.classList.add("hidden");
-    partField.classList.add("hidden");
-    clearMessages();
+    fillParts();
+    renderMessages();
+    renderSheets();
+    showPages();
+    status.textContent = "";
   });
 }
 
@@ -336,3 +584,4 @@ if (settings.instrumentId === DEFAULT_SETTINGS.instrumentId) {
   instrumentHint.textContent = "Retenu pour la prochaine fois.";
 }
 bind();
+renderSheets();
