@@ -46,6 +46,16 @@ const PREFERENCE: Record<number, readonly string[]> = {
   4: ["0", "2", "1", "1-2", "2-3", "4", "2-4", "1-4", "1-2-4", "2-3-4", "1-3-4", "1-2-3-4"],
 };
 
+/**
+ * A slide replaces the valves: seven positions, each one semitone lower than
+ * the last, so position number = semitones below the harmonic, plus one. Same
+ * harmonic series, same arithmetic — only the label changes.
+ */
+export const SLIDE_POSITIONS: readonly string[] = ["1", "2", "3", "4", "5", "6", "7"];
+
+/** Instruments with a slide are stored with a valve count of zero. */
+export const SLIDE = 0;
+
 function dropOf(combination: string): number {
   if (combination === "0") return 0;
   return combination
@@ -68,7 +78,7 @@ export function assertPreferenceOrder(): void {
 }
 
 export interface FingeringChoice {
-  /** Valve combination, e.g. "0", "1", "1-3". */
+  /** Valve combination ("0", "1", "1-3") or slide position ("1".."7"). */
   readonly valves: string;
   /** Harmonic the note sits on. */
   readonly harmonic: number;
@@ -84,7 +94,8 @@ export function fingeringFor(
   fundamental: number,
   valveCount: number,
 ): FingeringChoice | null {
-  const combinations = PREFERENCE[valveCount] ?? PREFERENCE[3]!;
+  const combinations =
+    valveCount === SLIDE ? SLIDE_POSITIONS : (PREFERENCE[valveCount] ?? PREFERENCE[3]!);
   let best: FingeringChoice | null = null;
   let bestDrop = Infinity;
 
