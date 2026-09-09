@@ -1,105 +1,104 @@
 /**
- * Export PDF.
+ * Turns engraved pages into a downloadable PDF.
  *
- * Le PDF ne contient que la partition : pas de page de garde, pas de légende,
- * pas de tableau de doigtés. Ce qui est à l'écran est ce qui s'imprime.
- *
- * Chaque page SVG est rendue dans un canvas puis posée dans le PDF. On passe
- * par le canvas plutôt que par une conversion SVG vectorielle parce que le
- * rendu obtenu est exactement celui de l'aperçu, sur tous les navigateurs, sans
- * dépendre du support des polices ou des symboles SMuFL. À 300 points par
- * pouce, l'impression est nette sur un pupitre comme sur une imprimante.
+ * Vector output is attempted first, which keeps the file small and sharp at any
+ * zoom. Should the converter choke on a page, that page falls back to a
+ * high-resolution bitmap: a slightly heavier file beats no file at all.
  */
+const A4_POINTS = { width: 595.28, height: 841.89 } as const;
+const RASTER_SCALE = 3;
 
-const A4_POINTS = { largeur: 595.28, hauteur: 841.89 };
-const PPP = 300;
+export type PdfMode = "vector" | "raster";
 
-/** Rend un SVG dans un canvas à la résolution demandée. */
-async function rendre(svg: string, largeurPx: number, hauteurPx: number): Promise<HTMLCanvasElement> {
-  // Le SVG de Verovio est autonome (glyphes inclus), il peut donc être chargé
-  // comme une image sans requête réseau.
-  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+export interface PdfResult {
+  readonly blob: Blob;
+  readonly mode: PdfMode;
+}
+
+export async function pagesToPdf(svgPages: string[]): Promise<PdfResult> {
+  const { jsPDF } = await import("jspdf");
+  const document_ = new jsPDF({ unit: "pt", format: "a4", compress: true });
+  let mode: PdfMode = "vector";
+
+  let svgToPdf: typeof import("svg2pdf.js").svg2pdf | null = null;
+  try {
+    ({ svg2pdf: svgToPdf } = await import("svg2pdf.js"));
+  } catch {
+    svgToPdf = null;
+  }
+
+  for (const [index, svg] of svgPages.entries()) {
+    if (index > 0) document_.addPage("a4", "portrait");
+    const element = parseSvg(svg);
+    let drawn = false;
+    if (svgToPdf) {
+      try {
+        await svgToPdf(element, document_, {
+          x: 0,
+          y: 0,
+          width: A4_POINTS.width,
+          height: A4_POINTS.height,
+        });
+        drawn = true;
+      } catch {
+        drawn = false;
+      }
+    }
+    if (!drawn) {
+      mode = "raster";
+      const dataUrl = await rasterise(svg);
+      document_.addImage(dataUrl, "PNG", 0, 0, A4_POINTS.width, A4_POINTS.height);
+    }
+  }
+
+  return { blob: document_.output("blob"), mode };
+}
+
+function parseSvg(svg: string): Element {
+  const holder = document.createElement("div");
+  holder.innerHTML = svg;
+  const element = holder.querySelector("svg");
+  if (!element) throw new Error("Page illisible.");
+  element.setAttribute("width", String(A4_POINTS.width));
+  element.setAttribute("height", String(A4_POINTS.height));
+  return element;
+}
+
+async function rasterise(svg: string): Promise<string> {
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   try {
-    const image = new Image();
-    image.width = largeurPx;
-    image.height = hauteurPx;
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("Le rendu de la page n'a pas abouti."));
-      image.src = url;
-    });
-    const canvas = document.createElement('canvas');
-    canvas.width = largeurPx;
-    canvas.height = hauteurPx;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error("Le navigateur n'a pas fourni de contexte de dessin.");
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, largeurPx, hauteurPx);
-    ctx.drawImage(image, 0, 0, largeurPx, hauteurPx);
-    return canvas;
+    const image = await loadImage(url);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(A4_POINTS.width * RASTER_SCALE);
+    canvas.height = Math.round(A4_POINTS.height * RASTER_SCALE);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas indisponible.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-export interface OptionsPdf {
-  /** Nom du fichier téléchargé, sans extension. */
-  nom: string;
-  /** Titre inscrit dans les métadonnées du PDF. */
-  titre?: string;
-  /** Appelé après chaque page, pour l'indicateur de progression. */
-  progression?: (faites: number, total: number) => void;
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Rendu de la page impossible."));
+    image.src = url;
+  });
 }
 
-export async function pdfDepuisSvg(pages: string[], o: OptionsPdf): Promise<Blob> {
-  const { jsPDF } = await import('jspdf');
-  const pdf = new jsPDF({ unit: 'pt', format: 'a4', compress: true });
-  pdf.setProperties({ title: o.titre ?? o.nom, creator: 'Tête de Moule' });
-
-  const largeurPx = Math.round((A4_POINTS.largeur / 72) * PPP);
-  const hauteurPx = Math.round((A4_POINTS.hauteur / 72) * PPP);
-
-  for (let i = 0; i < pages.length; i++) {
-    if (i > 0) pdf.addPage('a4', 'portrait');
-    const canvas = await rendre(pages[i]!, largeurPx, hauteurPx);
-    pdf.addImage(
-      canvas.toDataURL('image/jpeg', 0.92),
-      'JPEG',
-      0,
-      0,
-      A4_POINTS.largeur,
-      A4_POINTS.hauteur,
-      undefined,
-      'FAST',
-    );
-    o.progression?.(i + 1, pages.length);
-  }
-  return pdf.output('blob');
-}
-
-export function telecharger(blob: Blob, nomDeFichier: string): void {
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
-  const lien = document.createElement('a');
-  lien.href = url;
-  lien.download = nomDeFichier;
-  document.body.appendChild(lien);
-  lien.click();
-  lien.remove();
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-/** Nom de fichier sûr sur tous les systèmes. */
-export function nomDeFichier(...morceaux: string[]): string {
-  return (
-    morceaux
-      .filter(Boolean)
-      .join('-')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9-_]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-      .toLowerCase() || 'partition'
-  );
 }

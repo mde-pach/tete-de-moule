@@ -1,371 +1,338 @@
-import { lireMscz, lireMscx, type PartitionMsc, type PartieMsc } from '../lib/mscz';
-import { partieEnMusicXml } from '../lib/musicxml';
-import { graver } from '../lib/gravure';
-import { pdfDepuisSvg, telecharger, nomDeFichier } from '../lib/pdf';
+/**
+ * Wiring for the fingering workbench.
+ *
+ * The flow is deliberately short: drop a file, confirm the part, get a PDF.
+ * Settings are restored on load so a returning player only does step one.
+ */
+import { engrave } from "../lib/engraving.ts";
 import {
   INSTRUMENTS,
-  instrumentParId,
-  lectureParId,
+  findInstrument,
+  findReading,
   type Instrument,
-} from '../lib/instruments';
-import {
-  lirePreferences,
-  ecrirePreferences,
-  lectureProbable,
-  partieProbable,
-  PREFERENCES_PAR_DEFAUT,
-  type Preferences,
-} from '../lib/preferences';
+  type Reading,
+} from "../lib/instruments.ts";
+import { UNSUPPORTED_LABELS, describeRange } from "../lib/messages.ts";
+import { extractMscx, parseScore, type ParsedScore, type ScorePart } from "../lib/musescore.ts";
+import { toMusicXml } from "../lib/musicxml.ts";
+import { downloadBlob, pagesToPdf } from "../lib/pdf.ts";
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from "../lib/settings.ts";
 
-const NOMS_MIDI = ['Do', 'Ré\u266d', 'Ré', 'Mi\u266d', 'Mi', 'Fa', 'Sol\u266d', 'Sol', 'La\u266d', 'La', 'Si\u266d', 'Si'];
+const element = <T extends HTMLElement>(id: string): T =>
+  document.getElementById(id) as T;
 
-function nomDeHauteur(midi: number): string {
-  return `${NOMS_MIDI[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+const instrumentSelect = element<HTMLSelectElement>("instrument");
+const readingSelect = element<HTMLSelectElement>("reading");
+const valveSelect = element<HTMLSelectElement>("valves");
+const valveField = element<HTMLElement>("valves-field");
+const partSelect = element<HTMLSelectElement>("part");
+const partField = element<HTMLElement>("part-field");
+const partHint = element<HTMLElement>("part-hint");
+const instrumentHint = element<HTMLElement>("instrument-hint");
+const dropzone = element<HTMLElement>("dropzone");
+const fileInput = element<HTMLInputElement>("file");
+const messages = element<HTMLElement>("messages");
+const actions = element<HTMLElement>("actions");
+const preview = element<HTMLElement>("preview");
+const pages = element<HTMLElement>("pages");
+const status = element<HTMLElement>("status");
+const downloadButton = element<HTMLButtonElement>("download");
+const resetButton = element<HTMLButtonElement>("reset");
+const fingeringToggle = element<HTMLInputElement>("show-fingerings");
+const noteNameToggle = element<HTMLInputElement>("show-note-names");
+const measureNumberToggle = element<HTMLInputElement>("show-measure-numbers");
+
+let settings: Settings = loadSettings();
+let score: ParsedScore | null = null;
+let sourceName = "partition";
+let renderedPages: string[] = [];
+let renderToken = 0;
+
+function currentInstrument(): Instrument {
+  return findInstrument(settings.instrumentId) ?? INSTRUMENTS[0]!;
 }
 
-function el<T extends HTMLElement>(id: string): T {
-  const trouve = document.getElementById(id);
-  if (!trouve) throw new Error(`Élément introuvable : ${id}`);
-  return trouve as T;
+function currentReading(): Reading {
+  const instrument = currentInstrument();
+  return findReading(instrument, settings.readingId) ?? instrument.readings[0]!;
 }
 
-export function demarrer(): void {
-  // --- éléments -----------------------------------------------------------
-  const pastille = el<HTMLButtonElement>('pastille-instrument');
-  const pastilleValeur = el<HTMLSpanElement>('pastille-valeur');
-  const panneau = el<HTMLDivElement>('panneau-instrument');
-  const choixInstrument = el<HTMLSelectElement>('choix-instrument');
-  const choixPistons = el<HTMLSelectElement>('choix-pistons');
-  const choixLecture = el<HTMLSelectElement>('choix-lecture');
-  const basculeDoigtes = el<HTMLInputElement>('bascule-doigtes');
-  const basculeNoms = el<HTMLInputElement>('bascule-noms');
-
-  const depot = el<HTMLLabelElement>('depot');
-  const champFichier = el<HTMLInputElement>('fichier');
-  const depotTitre = el<HTMLSpanElement>('depot-titre');
-  const depotDetail = el<HTMLSpanElement>('depot-detail');
-  const alerte = el<HTMLParagraphElement>('alerte');
-
-  const etapeLigne = el<HTMLElement>('etape-ligne');
-  const etapeReglages = el<HTMLElement>('etape-reglages');
-  const etapeApercu = el<HTMLElement>('etape-apercu');
-  const resumeFichier = el<HTMLParagraphElement>('resume-fichier');
-  const listeLignes = el<HTMLDivElement>('lignes');
-  const feuilles = el<HTMLDivElement>('feuilles');
-  const etatGravure = el<HTMLParagraphElement>('etat-gravure');
-  const boutonPdf = el<HTMLButtonElement>('bouton-pdf');
-
-  // --- état ---------------------------------------------------------------
-  let preferences: Preferences = lirePreferences() ?? { ...PREFERENCES_PAR_DEFAUT };
-  const premiereVisite = lirePreferences() === null;
-  let partition: PartitionMsc | null = null;
-  let partieChoisie: PartieMsc | null = null;
-  let choixManuel = false;
-  let nomSource = '';
-  let pages: string[] = [];
-  let jeton = 0;
-
-  const instrument = (): Instrument => instrumentParId(preferences.instrument) ?? INSTRUMENTS[0]!;
-
-  function enregistrer(): void {
-    ecrirePreferences(preferences);
+function fillReadings(): void {
+  const instrument = currentInstrument();
+  readingSelect.innerHTML = "";
+  for (const reading of instrument.readings) {
+    const option = document.createElement("option");
+    option.value = reading.id;
+    option.textContent = reading.label;
+    readingSelect.append(option);
   }
-
-  function signaler(message: string | null): void {
-    alerte.textContent = message ?? '';
-    alerte.hidden = message === null;
+  if (!findReading(instrument, settings.readingId)) {
+    settings.readingId = instrument.readings[0]!.id;
   }
+  readingSelect.value = settings.readingId;
 
-  // --- panneau instrument -------------------------------------------------
-  function majPastille(): void {
-    const i = instrument();
-    const pistons = i.pistons.length > 1 ? ` · ${preferences.pistons} pistons` : '';
-    pastilleValeur.textContent = `${i.court}${pistons}`;
+  valveSelect.innerHTML = "";
+  for (const count of instrument.valveCounts) {
+    const option = document.createElement("option");
+    option.value = String(count);
+    option.textContent = `${count} pistons`;
+    valveSelect.append(option);
   }
-
-  function ouvrirPanneau(ouvert: boolean): void {
-    panneau.hidden = !ouvert;
-    pastille.setAttribute('aria-expanded', String(ouvert));
+  if (!instrument.valveCounts.includes(settings.valveCount)) {
+    settings.valveCount = instrument.valveCounts[0]!;
   }
+  valveSelect.value = String(settings.valveCount);
+  valveField.classList.toggle("hidden", instrument.valveCounts.length < 2);
+}
 
-  function remplirPistons(): void {
-    const i = instrument();
-    choixPistons.replaceChildren(
-      ...i.pistons.map((n) => {
-        const o = document.createElement('option');
-        o.value = String(n);
-        o.textContent = `${n} pistons`;
-        return o;
-      }),
-    );
-    if (!i.pistons.includes(preferences.pistons)) preferences.pistons = i.pistons[0]!;
-    choixPistons.value = String(preferences.pistons);
-    choixPistons.disabled = i.pistons.length < 2;
-  }
-
-  function remplirLectures(): void {
-    const i = instrument();
-    choixLecture.replaceChildren(
-      ...i.lectures.map((l) => {
-        const o = document.createElement('option');
-        o.value = l.id;
-        o.textContent = l.nom;
-        return o;
-      }),
-    );
-    if (!i.lectures.some((l) => l.id === preferences.lecture)) {
-      preferences.lecture = i.lectures[0]!.id;
+/** Guesses the player's line from how well its range matches the instrument. */
+function guessPart(parsed: ParsedScore, instrument: Instrument): number {
+  const [low, high] = instrument.comfortableRange;
+  let bestIndex = 0;
+  let bestScore = -Infinity;
+  parsed.parts.forEach((part, index) => {
+    if (!part.range || part.noteCount === 0) return;
+    const [partLow, partHigh] = part.range;
+    const overlap = Math.min(high, partHigh) - Math.max(low, partLow);
+    const centreDistance = Math.abs((partLow + partHigh) / 2 - (low + high) / 2);
+    const score = overlap - centreDistance;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
     }
-    choixLecture.value = preferences.lecture;
+  });
+  return bestIndex;
+}
+
+function fillParts(parsed: ParsedScore): void {
+  partSelect.innerHTML = "";
+  parsed.parts.forEach((part, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `${part.name}${part.noteCount ? "" : " (vide)"}`;
+    option.disabled = part.noteCount === 0;
+    partSelect.append(option);
+  });
+  partSelect.value = String(guessPart(parsed, currentInstrument()));
+  partField.classList.remove("hidden");
+  updatePartHint();
+}
+
+function updatePartHint(): void {
+  const part = selectedPart();
+  partHint.textContent = part?.range
+    ? `${part.noteCount} notes, de ${describeRange(part.range[0], part.range[1])} en son réel.`
+    : "";
+}
+
+function selectedPart(): ScorePart | null {
+  if (!score) return null;
+  return score.parts[Number(partSelect.value)] ?? null;
+}
+
+function showMessage(kind: "warn" | "error", title: string, items: string[] = []): void {
+  const box = document.createElement("div");
+  box.className = `notice notice--${kind}`;
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  box.append(heading);
+  if (items.length) {
+    const list = document.createElement("ul");
+    for (const item of items) {
+      const entry = document.createElement("li");
+      entry.textContent = item;
+      list.append(entry);
+    }
+    box.append(list);
   }
+  messages.append(box);
+}
 
-  // --- liste des portées --------------------------------------------------
-  function dessinerLignes(): void {
-    if (!partition) return;
-    const jouables = partition.parties.filter((p) => p.nombreDeNotes > 0 && p.cle !== 'PERC');
-    const suggeree = partieProbable(instrument(), partition.parties);
+function clearMessages(): void {
+  messages.innerHTML = "";
+}
 
-    listeLignes.replaceChildren(
-      ...jouables.map((partie) => {
-        const bouton = document.createElement('button');
-        bouton.type = 'button';
-        bouton.className = 'ligne';
-        bouton.setAttribute('role', 'radio');
-        bouton.setAttribute('aria-checked', String(partie === partieChoisie));
-
-        const nom = document.createElement('span');
-        nom.className = 'ligne__nom';
-        nom.textContent = partie.nom;
-        if (partie === suggeree && !choixManuel) {
-          const marque = document.createElement('span');
-          marque.className = 'ligne__marque';
-          marque.textContent = 'sans doute la tienne';
-          nom.append(marque);
-        }
-
-        const detail = document.createElement('span');
-        detail.className = 'ligne__detail';
-        detail.textContent = `${partie.nombreDeNotes} notes`;
-
-        const ambitus = document.createElement('span');
-        ambitus.className = 'ligne__ambitus';
-        ambitus.textContent = partie.ambitus
-          ? `${nomDeHauteur(partie.ambitus[0])} – ${nomDeHauteur(partie.ambitus[1])}`
-          : '';
-
-        bouton.append(nom, ambitus, detail);
-        bouton.addEventListener('click', () => {
-          choixManuel = true;
-          partieChoisie = partie;
-          preferences.lecture = lectureProbable(instrument(), partie).id;
-          enregistrer();
-          remplirLectures();
-          dessinerLignes();
-          void rendre();
-        });
-        return bouton;
-      }),
+async function handleFile(file: File): Promise<void> {
+  clearMessages();
+  sourceName = file.name.replace(/\.(mscz|mscx)$/i, "") || "partition";
+  status.textContent = "";
+  try {
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    const mscx = file.name.toLowerCase().endsWith(".mscx")
+      ? new TextDecoder().decode(buffer)
+      : extractMscx(buffer);
+    score = parseScore(mscx);
+  } catch (error) {
+    score = null;
+    showMessage("error", error instanceof Error ? error.message : "Fichier illisible.");
+    return;
+  }
+  fillParts(score);
+  if (score.warnings.size) {
+    showMessage(
+      "warn",
+      "Certains éléments ne sont pas repris à l'identique :",
+      [...score.warnings].map((code) => UNSUPPORTED_LABELS[code]),
     );
   }
+  await render();
+}
 
-  // --- gravure ------------------------------------------------------------
-  function attente(message: string): void {
-    feuilles.replaceChildren();
-    const f = document.createElement('div');
-    f.className = 'feuille feuille--attente';
-    f.textContent = message;
-    feuilles.append(f);
-  }
+function buildMusicXml(): string | null {
+  const part = selectedPart();
+  if (!score || !part) return null;
+  const instrument = currentInstrument();
+  const reading = currentReading();
+  return toMusicXml({
+    part,
+    instrument,
+    reading,
+    valveCount: settings.valveCount,
+    showFingerings: settings.showFingerings,
+    showNoteNames: settings.showNoteNames,
+    title: score.title || sourceName,
+    partLabel: `${part.name} — ${reading.label}`.replace(/[♭♯]/g, (sign) => (sign === "♭" ? "b" : "#")),
+    tempoBpm: score.tempoBpm,
+  });
+}
 
-  async function rendre(): Promise<void> {
-    if (!partition || !partieChoisie) return;
-    const monJeton = ++jeton;
-    boutonPdf.disabled = true;
-    etatGravure.textContent = 'Gravure en cours…';
-    if (!pages.length) attente('Préparation de la partition…');
-
-    const i = instrument();
-    const lecture = lectureParId(i, preferences.lecture) ?? i.lectures[0]!;
-    try {
-      const musicxml = partieEnMusicXml(partition, partieChoisie, {
-        instrument: i,
-        lecture,
-        pistons: preferences.pistons,
-        doigtes: preferences.doigtes,
-        nomsDeNotes: preferences.nomsDeNotes,
-        nomDePartie: partieChoisie.nom,
-        tempo: partition.tempo,
-      });
-      const nouvelles = await graver(musicxml);
-      if (monJeton !== jeton) return;
-      pages = nouvelles;
-
-      feuilles.replaceChildren(
-        ...pages.map((svg) => {
-          const f = document.createElement('div');
-          f.className = 'feuille';
-          f.innerHTML = svg;
-          return f;
-        }),
-      );
-      etatGravure.textContent = `${pages.length} page${pages.length > 1 ? 's' : ''} · A4`;
-      boutonPdf.disabled = false;
-      signaler(null);
-    } catch (erreur) {
-      if (monJeton !== jeton) return;
-      pages = [];
-      attente('Cette ligne n’a pas pu être gravée.');
-      etatGravure.textContent = '';
-      signaler(
-        erreur instanceof Error
-          ? erreur.message
-          : "La gravure a échoué. Essaie une autre ligne de la partition.",
-      );
+async function render(): Promise<void> {
+  const musicXml = buildMusicXml();
+  if (!musicXml) return;
+  const token = ++renderToken;
+  status.innerHTML = '<span class="spinner"></span> Gravure en cours…';
+  actions.classList.remove("hidden");
+  downloadButton.disabled = true;
+  try {
+    const svgPages = await engrave(musicXml, {
+      showMeasureNumbers: settings.showMeasureNumbers,
+    });
+    if (token !== renderToken) return;
+    renderedPages = svgPages;
+    pages.innerHTML = "";
+    for (const svg of svgPages) {
+      const holder = document.createElement("div");
+      holder.className = "preview__page";
+      holder.innerHTML = svg;
+      pages.append(holder);
     }
+    preview.classList.remove("hidden");
+    status.textContent = `${svgPages.length} page${svgPages.length > 1 ? "s" : ""}`;
+    downloadButton.disabled = false;
+  } catch (error) {
+    if (token !== renderToken) return;
+    status.textContent = "";
+    showMessage("error", error instanceof Error ? error.message : "Gravure impossible.");
   }
+}
 
-  // --- chargement d'un fichier -------------------------------------------
-  async function charger(fichier: File): Promise<void> {
-    signaler(null);
-    depotTitre.textContent = 'Lecture du fichier…';
-    depotDetail.textContent = fichier.name;
-    try {
-      const donnees = new Uint8Array(await fichier.arrayBuffer());
-      partition = fichier.name.endsWith('.mscx')
-        ? lireMscx(new TextDecoder().decode(donnees))
-        : lireMscz(donnees);
-      if (!partition.parties.length) {
-        throw new Error("Cette partition ne contient aucune portée.");
-      }
-      nomSource = fichier.name.replace(/\.(mscz|mscx)$/i, '');
-      choixManuel = false;
-      partieChoisie = partieProbable(instrument(), partition.parties);
-      if (!partieChoisie) throw new Error("Aucune portée jouable dans cette partition.");
-      preferences.lecture = lectureProbable(instrument(), partieChoisie).id;
-      enregistrer();
-
-      depot.classList.add('est-chargee');
-      depotTitre.textContent = partition.titre || nomSource;
-      depotDetail.textContent = 'Choisir un autre fichier';
-      resumeFichier.textContent = `${partition.parties.length} portées · hauteurs réelles`;
-
-      etapeLigne.hidden = false;
-      etapeReglages.hidden = false;
-      etapeApercu.hidden = false;
-      remplirLectures();
-      dessinerLignes();
-      etapeLigne.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      await rendre();
-    } catch (erreur) {
-      depot.classList.remove('est-chargee');
-      depotTitre.textContent = 'Dépose ta partition ici';
-      depotDetail.textContent = 'ou clique pour choisir un fichier .mscz';
-      signaler(
-        erreur instanceof Error
-          ? erreur.message
-          : "Ce fichier n'a pas pu être lu. Exporte-le depuis MuseScore au format .mscz.",
-      );
-    }
+async function download(): Promise<void> {
+  if (!renderedPages.length) return;
+  downloadButton.disabled = true;
+  status.innerHTML = '<span class="spinner"></span> Préparation du PDF…';
+  try {
+    const { blob, mode } = await pagesToPdf(renderedPages);
+    const reading = currentReading();
+    downloadBlob(blob, `${sourceName} — ${reading.id}.pdf`);
+    status.textContent = mode === "raster" ? "PDF prêt (rendu image)." : "PDF prêt.";
+  } catch (error) {
+    showMessage("error", error instanceof Error ? error.message : "Export PDF impossible.");
+    status.textContent = "";
+  } finally {
+    downloadButton.disabled = false;
   }
+}
 
-  // --- écouteurs ----------------------------------------------------------
-  pastille.addEventListener('click', () => ouvrirPanneau(panneau.hidden));
+function persist(): void {
+  saveSettings(settings);
+  instrumentHint.textContent = "Retenu pour la prochaine fois.";
+}
 
-  choixInstrument.addEventListener('change', () => {
-    preferences.instrument = choixInstrument.value;
-    remplirPistons();
-    remplirLectures();
-    majPastille();
-    if (partition) {
-      if (!choixManuel) partieChoisie = partieProbable(instrument(), partition.parties);
-      if (partieChoisie) preferences.lecture = lectureProbable(instrument(), partieChoisie).id;
-      remplirLectures();
-      dessinerLignes();
-      void rendre();
-    }
-    enregistrer();
+function bind(): void {
+  instrumentSelect.value = settings.instrumentId;
+  fingeringToggle.checked = settings.showFingerings;
+  noteNameToggle.checked = settings.showNoteNames;
+  measureNumberToggle.checked = settings.showMeasureNumbers;
+  fillReadings();
+
+  instrumentSelect.addEventListener("change", () => {
+    settings.instrumentId = instrumentSelect.value;
+    settings.readingId = "";
+    fillReadings();
+    persist();
+    if (score) partSelect.value = String(guessPart(score, currentInstrument()));
+    updatePartHint();
+    void render();
   });
 
-  choixPistons.addEventListener('change', () => {
-    preferences.pistons = Number(choixPistons.value);
-    majPastille();
-    enregistrer();
-    void rendre();
+  readingSelect.addEventListener("change", () => {
+    settings.readingId = readingSelect.value;
+    persist();
+    void render();
   });
 
-  choixLecture.addEventListener('change', () => {
-    preferences.lecture = choixLecture.value;
-    enregistrer();
-    void rendre();
+  valveSelect.addEventListener("change", () => {
+    settings.valveCount = Number(valveSelect.value);
+    persist();
+    void render();
   });
 
-  basculeDoigtes.addEventListener('change', () => {
-    preferences.doigtes = basculeDoigtes.checked;
-    enregistrer();
-    void rendre();
-  });
-
-  basculeNoms.addEventListener('change', () => {
-    preferences.nomsDeNotes = basculeNoms.checked;
-    enregistrer();
-    void rendre();
-  });
-
-  champFichier.addEventListener('change', () => {
-    const fichier = champFichier.files?.[0];
-    if (fichier) void charger(fichier);
-  });
-
-  for (const evenement of ['dragenter', 'dragover'] as const) {
-    depot.addEventListener(evenement, (e) => {
-      e.preventDefault();
-      depot.classList.add('est-survolee');
+  for (const [input, key] of [
+    [fingeringToggle, "showFingerings"],
+    [noteNameToggle, "showNoteNames"],
+    [measureNumberToggle, "showMeasureNumbers"],
+  ] as const) {
+    input.addEventListener("change", () => {
+      settings = { ...settings, [key]: input.checked };
+      persist();
+      void render();
     });
   }
-  for (const evenement of ['dragleave', 'drop'] as const) {
-    depot.addEventListener(evenement, () => depot.classList.remove('est-survolee'));
-  }
-  depot.addEventListener('drop', (e) => {
-    e.preventDefault();
-    const fichier = e.dataTransfer?.files?.[0];
-    if (fichier) void charger(fichier);
-  });
-  // Sans cela, déposer à côté de la zone ouvre le fichier dans l'onglet.
-  window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('drop', (e) => e.preventDefault());
 
-  boutonPdf.addEventListener('click', async () => {
-    if (!pages.length || !partieChoisie) return;
-    const libelle = boutonPdf.textContent ?? 'Télécharger le PDF';
-    boutonPdf.disabled = true;
-    try {
-      const blob = await pdfDepuisSvg(pages, {
-        nom: nomSource,
-        titre: partition?.titre || nomSource,
-        progression: (faites, total) => {
-          boutonPdf.textContent = `Page ${faites} sur ${total}…`;
-        },
-      });
-      telecharger(blob, `${nomDeFichier(nomSource, partieChoisie.nom)}.pdf`);
-    } catch (erreur) {
-      signaler(
-        erreur instanceof Error ? erreur.message : "Le PDF n'a pas pu être produit.",
-      );
-    } finally {
-      boutonPdf.textContent = libelle;
-      boutonPdf.disabled = false;
+  partSelect.addEventListener("change", () => {
+    updatePartHint();
+    void render();
+  });
+
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      fileInput.click();
     }
   });
+  dropzone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropzone.dataset.active = "true";
+  });
+  dropzone.addEventListener("dragleave", () => {
+    delete dropzone.dataset.active;
+  });
+  dropzone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    delete dropzone.dataset.active;
+    const file = event.dataTransfer?.files?.[0];
+    if (file) void handleFile(file);
+  });
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    if (file) void handleFile(file);
+  });
 
-  // --- initialisation -----------------------------------------------------
-  choixInstrument.value = preferences.instrument;
-  remplirPistons();
-  remplirLectures();
-  basculeDoigtes.checked = preferences.doigtes;
-  basculeNoms.checked = preferences.nomsDeNotes;
-  majPastille();
-  if (premiereVisite) {
-    pastilleValeur.textContent = 'Choisir mon instrument';
-    ouvrirPanneau(true);
-  }
+  downloadButton.addEventListener("click", () => void download());
+  resetButton.addEventListener("click", () => {
+    score = null;
+    renderedPages = [];
+    fileInput.value = "";
+    pages.innerHTML = "";
+    preview.classList.add("hidden");
+    actions.classList.add("hidden");
+    partField.classList.add("hidden");
+    clearMessages();
+  });
 }
+
+if (settings.instrumentId === DEFAULT_SETTINGS.instrumentId) {
+  instrumentHint.textContent = "Retenu pour la prochaine fois.";
+}
+bind();

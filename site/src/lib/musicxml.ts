@@ -1,225 +1,358 @@
-import type { PartieMsc, PartitionMsc } from './mscz';
-import type { Instrument, Lecture } from './instruments';
-import { doigte, noteEcrite } from './doigtes';
-
 /**
- * Réécriture d'une partie MuseScore en MusicXML, dans la lecture choisie.
+ * Rewrites one part of a parsed MuseScore score as MusicXML, in the clef and
+ * transposition the player reads, with fingerings and note names attached.
  *
- * On repart toujours de la hauteur RÉELLE de chaque note, jamais de son
- * écriture d'origine. La lecture fournit la transposition (donc l'octave et la
- * clé) et le décalage d'armure. C'est ce qui évite le piège classique : une
- * partie d'euphonium passée en clé de sol doit monter d'une octave de plus
- * qu'une partie de trompette, sinon toutes les notes tombent sous la portée.
+ * Fingerings and note names ride along as lyric verses: verse 1 is the valve
+ * combination, verse 2 the French note name. Engravers place lyrics under the
+ * staff, aligned with each note, which is exactly where a player wants them.
  */
+import { fingeringFor } from "./fingering.ts";
+import {
+  fifthsShift,
+  writtenPitch,
+  type Instrument,
+  type Reading,
+} from "./instruments.ts";
+import type { Measure, NoteEvent, ScorePart } from "./musescore.ts";
 
 const DIVISIONS = 480;
 
-const DUREES: Record<string, number> = {
-  whole: 4 * DIVISIONS, half: 2 * DIVISIONS, quarter: DIVISIONS,
-  eighth: DIVISIONS / 2, '16th': DIVISIONS / 4, '32nd': DIVISIONS / 8,
-  '64th': DIVISIONS / 16,
+const DURATION_TICKS: Record<string, number> = {
+  breve: 8 * DIVISIONS,
+  whole: 4 * DIVISIONS,
+  half: 2 * DIVISIONS,
+  quarter: DIVISIONS,
+  eighth: DIVISIONS / 2,
+  "16th": DIVISIONS / 4,
+  "32nd": DIVISIONS / 8,
+  "64th": DIVISIONS / 16,
+  "128th": DIVISIONS / 32,
 };
 
-const ARTICULATIONS: Record<string, string> = {
-  articStaccatoAbove: 'staccato', articStaccatoBelow: 'staccato',
-  articAccentAbove: 'accent', articAccentBelow: 'accent',
-  articTenutoAbove: 'tenuto', articTenutoBelow: 'tenuto',
-  articMarcatoAbove: 'strong-accent', articMarcatoBelow: 'strong-accent',
+const ARTICULATION_NAMES: Record<string, string> = {
+  articStaccatoAbove: "staccato",
+  articStaccatoBelow: "staccato",
+  articAccentAbove: "accent",
+  articAccentBelow: "accent",
+  articTenutoAbove: "tenuto",
+  articTenutoBelow: "tenuto",
+  articMarcatoAbove: "strong-accent",
+  articMarcatoBelow: "strong-accent",
+  articStaccatissimoAbove: "staccatissimo",
+  articStaccatissimoBelow: "staccatissimo",
 };
 
-const NOMS_ALTERATION: Record<number, string> = {
-  '-2': 'flat-flat', '-1': 'flat', 0: 'natural', 1: 'sharp', 2: 'sharp-sharp',
+const ACCIDENTAL_NAMES: Record<number, string> = {
+  [-2]: "flat-flat",
+  [-1]: "flat",
+  0: "natural",
+  1: "sharp",
+  2: "sharp-sharp",
 };
 
-export interface OptionsGravure {
-  instrument: Instrument;
-  lecture: Lecture;
-  pistons: number;
-  /** Écrire la combinaison de pistons sous chaque note. */
-  doigtes: boolean;
-  /** Écrire le nom de la note sous le doigté. */
-  nomsDeNotes: boolean;
-  titre?: string;
-  nomDePartie?: string;
-  tempo?: number | null;
+/** Circle-of-fifths letter order used by MuseScore tonal pitch classes. */
+const LETTERS = "FCGDAEB";
+const NATURAL_PITCH_CLASS: Record<string, number> = {
+  C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11,
+};
+const FRENCH_NAMES: Record<string, string> = {
+  C: "Do", D: "Ré", E: "Mi", F: "Fa", G: "Sol", A: "La", B: "Si",
+};
+const FRENCH_ACCIDENTALS: Record<number, string> = {
+  [-2]: "♭♭", [-1]: "♭", 0: "", 1: "♯", 2: "♯♯",
+};
+
+export interface Spelling {
+  readonly step: string;
+  readonly alter: number;
+  readonly octave: number;
 }
 
-function ech(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+export function spell(tpc: number, pitch: number): Spelling {
+  const step = LETTERS[((((tpc - 13) % 7) + 7) % 7)]!;
+  const alter = Math.floor((tpc - 13) / 7);
+  const octave = Math.floor((pitch - alter - NATURAL_PITCH_CLASS[step]!) / 12) - 1;
+  return { step, alter, octave };
 }
 
-function dureeEt(duree: string, points: number): { ticks: number; type: string } {
-  const base = DUREES[duree] ?? DIVISIONS;
-  let ticks = base;
-  let ajout = base;
-  for (let i = 0; i < points; i++) {
-    ajout /= 2;
-    ticks += ajout;
+export function frenchNoteName(tpc: number): string {
+  const step = LETTERS[((((tpc - 13) % 7) + 7) % 7)]!;
+  const alter = Math.floor((tpc - 13) / 7);
+  return FRENCH_NAMES[step]! + (FRENCH_ACCIDENTALS[alter] ?? "");
+}
+
+export interface RewriteOptions {
+  readonly part: ScorePart;
+  readonly instrument: Instrument;
+  readonly reading: Reading;
+  readonly valveCount: number;
+  readonly showFingerings: boolean;
+  readonly showNoteNames: boolean;
+  readonly title: string;
+  readonly partLabel: string;
+  readonly tempoBpm: number | null;
+}
+
+class XmlBuilder {
+  private readonly chunks: string[] = [];
+
+  open(tag: string, attributes: Record<string, string | number> = {}): this {
+    const rendered = Object.entries(attributes)
+      .map(([key, value]) => ` ${key}="${escapeXml(String(value))}"`)
+      .join("");
+    this.chunks.push(`<${tag}${rendered}>`);
+    return this;
   }
-  return { ticks, type: duree };
+
+  close(tag: string): this {
+    this.chunks.push(`</${tag}>`);
+    return this;
+  }
+
+  empty(tag: string, attributes: Record<string, string | number> = {}): this {
+    const rendered = Object.entries(attributes)
+      .map(([key, value]) => ` ${key}="${escapeXml(String(value))}"`)
+      .join("");
+    this.chunks.push(`<${tag}${rendered}/>`);
+    return this;
+  }
+
+  leaf(tag: string, value: string | number, attributes: Record<string, string | number> = {}): this {
+    return this.open(tag, attributes).text(String(value)).close(tag);
+  }
+
+  text(value: string): this {
+    this.chunks.push(escapeXml(value));
+    return this;
+  }
+
+  toString(): string {
+    return this.chunks.join("");
+  }
 }
 
-/** Élément <transpose> correspondant à la lecture, ou rien si non transposée. */
-function transposition(lecture: Lecture): string {
-  if (lecture.transposition === 0) return '';
-  // On sépare l'octave du reste : -14 demi-tons = une seconde majeure + une octave.
-  const octaves = Math.floor(Math.abs(lecture.transposition) / 12) * Math.sign(lecture.transposition);
-  const reste = lecture.transposition - octaves * 12;
-  // Un intervalle de n quintes vaut 4n degrés diatoniques, modulo l'octave.
-  // 2 quintes = seconde majeure (1 degré), 3 quintes = sixte majeure (5 degrés).
-  const diatonique = -((((lecture.quintes * 4) % 7) + 7) % 7);
-  return [
-    '<transpose>',
-    `<diatonic>${diatonique}</diatonic>`,
-    `<chromatic>${reste}</chromatic>`,
-    octaves !== 0 ? `<octave-change>${octaves}</octave-change>` : '',
-    '</transpose>',
-  ].join('');
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-export function partieEnMusicXml(
-  partition: PartitionMsc,
-  partie: PartieMsc,
-  o: OptionsGravure,
-): string {
-  const { lecture } = o;
-  const morceaux: string[] = [];
+function ticksOf(
+  durationType: string,
+  dots: number,
+  tuplet: { actualNotes: number; normalNotes: number } | null,
+): number {
+  const base = DURATION_TICKS[durationType] ?? DIVISIONS;
+  let total = base;
+  let increment = base;
+  for (let index = 0; index < dots; index += 1) {
+    increment /= 2;
+    total += increment;
+  }
+  if (tuplet) total = Math.round((total * tuplet.normalNotes) / tuplet.actualNotes);
+  return total;
+}
 
-  morceaux.push('<?xml version="1.0" encoding="UTF-8"?>');
-  morceaux.push(
-    '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" ' +
-      '"http://www.musicxml.org/dtds/partwise.dtd">',
-  );
-  morceaux.push('<score-partwise version="3.1">');
-  morceaux.push(`<work><work-title>${ech(o.titre ?? partition.titre)}</work-title></work>`);
-  morceaux.push('<part-list><score-part id="P1">');
-  morceaux.push(`<part-name>${ech(o.nomDePartie ?? partie.nom)}</part-name>`);
-  morceaux.push('</score-part></part-list>');
-  morceaux.push('<part id="P1">');
+export function toMusicXml(options: RewriteOptions): string {
+  const { part, instrument, reading, valveCount } = options;
+  const shift = fifthsShift(reading.transpose);
+  const xml = new XmlBuilder();
 
-  partie.mesures.forEach((mesure, index) => {
-    morceaux.push(`<measure number="${index + 1}">`);
+  xml.open("score-partwise", { version: "4.0" });
+  xml.open("work").leaf("work-title", options.title).close("work");
+  xml.open("identification").open("encoding")
+    .leaf("software", "Tête de Moule").close("encoding").close("identification");
+  xml.open("part-list").open("score-part", { id: "P1" })
+    .leaf("part-name", options.partLabel).close("score-part").close("part-list");
+  xml.open("part", { id: "P1" });
 
-    if (index === 0) {
-      morceaux.push('<attributes>');
-      morceaux.push(`<divisions>${DIVISIONS}</divisions>`);
-      morceaux.push(`<key><fifths>${partie.armure + lecture.quintes}</fifths></key>`);
-      morceaux.push(
-        `<time><beats>${partie.chiffrage.haut}</beats>` +
-          `<beat-type>${partie.chiffrage.bas}</beat-type></time>`,
-      );
-      morceaux.push(
-        lecture.cle === 'fa'
-          ? '<clef><sign>F</sign><line>4</line></clef>'
-          : '<clef><sign>G</sign><line>2</line></clef>',
-      );
-      morceaux.push(transposition(lecture));
-      morceaux.push('</attributes>');
-      if (o.tempo) {
-        morceaux.push(
-          '<direction placement="above"><direction-type>' +
-            `<words>Noire = ${o.tempo}</words></direction-type>` +
-            `<sound tempo="${o.tempo}"/></direction>`,
-        );
+  let first = true;
+  for (const measure of part.measures) {
+    xml.open("measure", { number: measure.number });
+
+    const needsAttributes =
+      first || measure.keyFifths !== null || measure.time !== null;
+    if (needsAttributes) {
+      xml.open("attributes");
+      if (first) xml.leaf("divisions", DIVISIONS);
+      if (first || measure.keyFifths !== null) {
+        const concertFifths = measure.keyFifths ?? 0;
+        xml.open("key").leaf("fifths", concertFifths + shift).close("key");
       }
-    }
-
-    for (const ev of mesure.evenements) {
-      if (ev.type === 'nuance') {
-        morceaux.push(
-          '<direction placement="below"><direction-type><dynamics>' +
-            `<${ev.valeur}/></dynamics></direction-type></direction>`,
-        );
-      } else if (ev.type === 'texte') {
-        morceaux.push(
-          '<direction placement="above"><direction-type>' +
-            `<words>${ech(ev.valeur ?? '')}</words></direction-type></direction>`,
-        );
-      } else if (ev.type === 'silence') {
-        if (ev.duree === 'measure') {
-          const ticks = (partie.chiffrage.haut / partie.chiffrage.bas) * 4 * DIVISIONS;
-          morceaux.push(`<note><rest measure="yes"/><duration>${ticks}</duration></note>`);
-        } else {
-          const { ticks, type } = dureeEt(ev.duree ?? 'quarter', ev.points ?? 0);
-          morceaux.push(
-            `<note><rest/><duration>${ticks}</duration><type>${type}</type>` +
-              '<dot/>'.repeat(ev.points ?? 0) +
-              '</note>',
-          );
+      if (first || measure.time !== null) {
+        const time = measure.time ?? { beats: 4, beatType: 4 };
+        xml.open("time").leaf("beats", time.beats).leaf("beat-type", time.beatType).close("time");
+      }
+      if (first) {
+        xml.open("clef")
+          .leaf("sign", reading.clef)
+          .leaf("line", reading.clef === "F" ? 4 : 2)
+          .close("clef");
+        xml.open("transpose")
+          .leaf("diatonic", reading.transpose.diatonic)
+          .leaf("chromatic", reading.transpose.chromatic);
+        if (reading.transpose.octaveChange !== 0) {
+          xml.leaf("octave-change", reading.transpose.octaveChange);
         }
-      } else if (ev.type === 'note') {
-        const { ticks, type } = dureeEt(ev.duree ?? 'quarter', ev.points ?? 0);
-        const arts = (ev.articulations ?? [])
-          .map((a) => ARTICULATIONS[a])
-          .filter((a): a is string => Boolean(a));
-
-        (ev.notes ?? []).forEach((note, rang) => {
-          const hauteurEcrite = note.hauteur - lecture.transposition;
-          const ecrite = noteEcrite(note.tpc, lecture.quintes, hauteurEcrite);
-          const bloc: string[] = ['<note>'];
-          if (rang > 0) bloc.push('<chord/>');
-          bloc.push('<pitch>');
-          bloc.push(`<step>${ecrite.lettre}</step>`);
-          if (ecrite.alteration !== 0) bloc.push(`<alter>${ecrite.alteration}</alter>`);
-          bloc.push(`<octave>${ecrite.octave}</octave>`);
-          bloc.push('</pitch>');
-          bloc.push(`<duration>${ticks}</duration>`);
-          bloc.push(`<type>${type}</type>`);
-          bloc.push('<dot/>'.repeat(ev.points ?? 0));
-          if (note.alterationVisible) {
-            bloc.push(`<accidental>${NOMS_ALTERATION[ecrite.alteration] ?? 'natural'}</accidental>`);
-          }
-          if (arts.length) {
-            bloc.push('<notations><articulations>');
-            for (const a of arts) bloc.push(`<${a}/>`);
-            bloc.push('</articulations></notations>');
-          }
-          if (rang === 0 && (o.doigtes || o.nomsDeNotes)) {
-            let couplet = 1;
-            if (o.doigtes) {
-              const d = doigte(note.hauteur, o.instrument, o.pistons);
-              bloc.push(
-                `<lyric number="${couplet++}"><syllabic>single</syllabic>` +
-                  `<text>${ech(d.combinaison || '?')}</text></lyric>`,
-              );
-            }
-            if (o.nomsDeNotes) {
-              bloc.push(
-                `<lyric number="${couplet++}"><syllabic>single</syllabic>` +
-                  `<text>${ech(ecrite.nom)}</text></lyric>`,
-              );
-            }
-          }
-          bloc.push('</note>');
-          morceaux.push(bloc.join(''));
-        });
+        xml.close("transpose");
       }
+      xml.close("attributes");
     }
 
-    morceaux.push('</measure>');
-  });
+    if (measure.startRepeat || measure.voltaStart) {
+      xml.open("barline", { location: "left" });
+      if (measure.voltaStart) {
+        xml.empty("ending", { number: measure.voltaStart, type: "start" });
+      }
+      if (measure.startRepeat) {
+        xml.leaf("bar-style", "heavy-light");
+        xml.empty("repeat", { direction: "forward" });
+      }
+      xml.close("barline");
+    }
 
-  morceaux.push('</part></score-partwise>');
-  return morceaux.join('\n');
+    if (first && options.tempoBpm) {
+      xml.open("direction", { placement: "above" })
+        .open("direction-type").open("metronome")
+        .leaf("beat-unit", "quarter").leaf("per-minute", options.tempoBpm)
+        .close("metronome").close("direction-type")
+        .empty("sound", { tempo: options.tempoBpm })
+        .close("direction");
+    }
+    first = false;
+
+    for (const event of measure.events) {
+      if (event.kind === "direction") {
+        xml.open("direction", { placement: event.placement }).open("direction-type");
+        if (event.dynamic) {
+          xml.open("dynamics").empty(event.dynamic).close("dynamics");
+        } else {
+          xml.leaf("words", event.text);
+        }
+        xml.close("direction-type").close("direction");
+        continue;
+      }
+
+      if (event.kind === "rest") {
+        const ticks = ticksOf(event.durationType, event.dots, event.tuplet);
+        xml.open("note");
+        if (event.durationType === "measure") {
+          xml.empty("rest", { measure: "yes" });
+          xml.leaf("duration", measureTicks(measure));
+        } else {
+          xml.empty("rest");
+          xml.leaf("duration", ticks);
+          xml.leaf("type", event.durationType);
+          for (let index = 0; index < event.dots; index += 1) xml.empty("dot");
+        }
+        xml.close("note");
+        continue;
+      }
+
+      writeNote(xml, event, options, shift, instrument, reading, valveCount);
+    }
+
+    if (measure.endRepeat !== null || measure.voltaStop) {
+      xml.open("barline", { location: "right" });
+      if (measure.endRepeat !== null) xml.leaf("bar-style", "light-heavy");
+      if (measure.voltaStop) xml.empty("ending", { number: "1", type: "stop" });
+      if (measure.endRepeat !== null) {
+        xml.empty("repeat", { direction: "backward", times: measure.endRepeat });
+      }
+      xml.close("barline");
+    }
+
+    xml.close("measure");
+  }
+
+  xml.close("part").close("score-partwise");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n${xml.toString()}`;
 }
 
-/** Notes distinctes de la partie, pour la fiche de doigtés à l'écran. */
-export function notesDistinctes(partie: PartieMsc, lecture: Lecture) {
-  const vues = new Map<string, { hauteur: number; tpc: number; occurrences: number }>();
-  for (const mesure of partie.mesures) {
-    for (const ev of mesure.evenements) {
-      for (const note of ev.notes ?? []) {
-        const cle = `${note.hauteur}:${note.tpc}`;
-        const existante = vues.get(cle);
-        if (existante) existante.occurrences++;
-        else vues.set(cle, { hauteur: note.hauteur, tpc: note.tpc, occurrences: 1 });
-      }
+function measureTicks(measure: Measure): number {
+  const time = measure.time ?? { beats: 4, beatType: 4 };
+  return Math.round((DIVISIONS * 4 * time.beats) / time.beatType);
+}
+
+function writeNote(
+  xml: XmlBuilder,
+  event: NoteEvent,
+  options: RewriteOptions,
+  shift: number,
+  instrument: Instrument,
+  reading: Reading,
+  valveCount: number,
+): void {
+  const written = writtenPitch(event.pitch, reading.transpose);
+  const spelling = spell(event.tpc + shift, written);
+  const ticks = ticksOf(event.durationType, event.dots, event.tuplet);
+
+  xml.open("note");
+  if (event.chordIndex > 0) xml.empty("chord");
+  xml.open("pitch").leaf("step", spelling.step);
+  if (spelling.alter !== 0) xml.leaf("alter", spelling.alter);
+  xml.leaf("octave", spelling.octave).close("pitch");
+  xml.leaf("duration", ticks);
+
+  if (event.tieStop) xml.empty("tie", { type: "stop" });
+  if (event.tieStart) xml.empty("tie", { type: "start" });
+
+  xml.leaf("type", event.durationType);
+  for (let index = 0; index < event.dots; index += 1) xml.empty("dot");
+  if (event.hasAccidental) {
+    xml.leaf("accidental", ACCIDENTAL_NAMES[spelling.alter] ?? "natural");
+  }
+  if (event.tuplet) {
+    xml.open("time-modification")
+      .leaf("actual-notes", event.tuplet.actualNotes)
+      .leaf("normal-notes", event.tuplet.normalNotes)
+      .close("time-modification");
+  }
+
+  const articulations = event.articulations
+    .map((name) => ARTICULATION_NAMES[name])
+    .filter((name): name is string => Boolean(name));
+  const hasNotations =
+    articulations.length > 0 ||
+    event.tieStart || event.tieStop ||
+    event.slurStart || event.slurStop ||
+    event.tupletStart || event.tupletStop;
+
+  if (hasNotations) {
+    xml.open("notations");
+    if (event.tieStop) xml.empty("tied", { type: "stop" });
+    if (event.tieStart) xml.empty("tied", { type: "start" });
+    if (event.slurStop) xml.empty("slur", { type: "stop", number: 1 });
+    if (event.slurStart) xml.empty("slur", { type: "start", number: 1 });
+    if (event.tupletStart) xml.empty("tuplet", { type: "start", number: 1 });
+    if (event.tupletStop) xml.empty("tuplet", { type: "stop", number: 1 });
+    if (articulations.length > 0) {
+      xml.open("articulations");
+      for (const name of articulations) xml.empty(name);
+      xml.close("articulations");
+    }
+    xml.close("notations");
+  }
+
+  // Only the top note of a chord carries the annotations, to avoid stacking
+  // three fingerings under one stem.
+  if (event.chordIndex === 0) {
+    if (options.showFingerings) {
+      const fingering = fingeringFor(event.pitch, instrument.fundamental, valveCount);
+      xml.open("lyric", { number: 1 })
+        .leaf("syllabic", "single")
+        .leaf("text", fingering ? fingering.valves : "?")
+        .close("lyric");
+    }
+    if (options.showNoteNames) {
+      xml.open("lyric", { number: options.showFingerings ? 2 : 1 })
+        .leaf("syllabic", "single")
+        .leaf("text", frenchNoteName(event.tpc + shift))
+        .close("lyric");
     }
   }
-  return [...vues.values()]
-    .sort((a, b) => a.hauteur - b.hauteur)
-    .map((n) => ({
-      ...n,
-      ecrite: noteEcrite(n.tpc, lecture.quintes, n.hauteur - lecture.transposition),
-    }));
+
+  xml.close("note");
 }
