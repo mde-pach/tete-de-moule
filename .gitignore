@@ -1,7 +1,19 @@
+# Python
 __pycache__/
 *.py[cod]
+.venv/
+
+# Web
+node_modules/
+dist/
+.astro/
+
+# Sorties de travail : partitions et PDF ne sont pas versionnés
 *.musicxml
 *.pdf
 *.mscz
 *.svg
-.venv/
+!site/public/*.svg
+
+.DS_Store
+*.log
