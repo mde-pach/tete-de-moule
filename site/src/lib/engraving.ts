@@ -55,6 +55,9 @@ export async function engrave(
     breaks: "auto",
     mnumInterval: options.showMeasureNumbers === false ? 0 : 1,
     lyricSize: options.lyricSize ?? 4,
+    // "block" draws the thick barred rest MuseScore uses; the default "auto"
+    // switches to thin symbols on short runs, which looks inconsistent.
+    multiRestStyle: "block",
     spacingStaff: 20,
     spacingSystem: 10,
     footer: "none",
