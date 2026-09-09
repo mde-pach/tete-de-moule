@@ -1,10 +1,10 @@
 /**
  * Wiring for the fingering workbench.
  *
- * A player brings a folder, not one piece: several scores are held at once,
- * each keeping its own chosen part. The settings on the left are shared,
- * because they describe the player rather than the music — pick your
- * instrument once and every score follows.
+ * A player brings a folder, not one piece: several scores are held at once.
+ * The panel on the left describes the *player* — instrument, reading, valves —
+ * and is shared by everything. Which line to read is a property of each score,
+ * so it lives in that score's own row.
  */
 import { engrave } from "../lib/engraving.ts";
 import {
@@ -27,9 +27,6 @@ const instrumentSelect = element<HTMLSelectElement>("instrument");
 const readingSelect = element<HTMLSelectElement>("reading");
 const valveSelect = element<HTMLSelectElement>("valves");
 const valveField = element<HTMLElement>("valves-field");
-const partSelect = element<HTMLSelectElement>("part");
-const partField = element<HTMLElement>("part-field");
-const partHint = element<HTMLElement>("part-hint");
 const instrumentHint = element<HTMLElement>("instrument-hint");
 const dropzone = element<HTMLElement>("dropzone");
 const fileInput = element<HTMLInputElement>("file");
@@ -117,47 +114,62 @@ function fillReadings(): void {
   valveField.classList.toggle("hidden", instrument.valveCounts.length < 2);
 }
 
-/** Guesses the player's line from how well its range matches the instrument. */
+/**
+ * Part names are a mess across arrangements — "Basses", "Tuba Wagnérien en
+ * Si♭", "Euphonium 1" all mean the same chair — so a name alone cannot be
+ * trusted. These are only ever a bonus on top of harder evidence.
+ */
+const ALIASES: Record<string, RegExp> = {
+  euphonium: /euphonium|saxhorn basse|basse|baryton|tuba wagn/i,
+  baritone: /baryton|baritone|saxhorn/i,
+  "tuba-bflat": /tuba|sousaphone|souba|contrebasse|bombardon/i,
+  "trumpet-bflat": /trompette|trumpet|cornet/i,
+  flugelhorn: /bugle|flugel/i,
+  trombone: /trombone|coulisse/i,
+  "alto-horn": /alto|saxhorn alto|peck/i,
+};
+
+/** Sounding pitch class of a written C: 10 for a B♭ instrument, 3 for an E♭. */
+const keyOf = (fundamental: number): number => ((fundamental % 12) + 12) % 12;
+const partKeyOf = (transposeChromatic: number): number =>
+  ((transposeChromatic % 12) + 12) % 12;
+
+/**
+ * Picks a starting part. The player can always override it in the row, so this
+ * only has to be right often enough to save fourteen menus on a folder.
+ *
+ * The evidence is weighted by how badly it fails. Transposition is written in
+ * the file and cannot lie: an E♭ part is not for a B♭ instrument, whatever it
+ * is called. A part written at concert pitch stays eligible, since anyone can
+ * read one. The name comes next, and range — the weakest signal, and the only
+ * one used before — is left to break ties.
+ */
 function guessPart(parsed: ParsedScore, instrument: Instrument): number {
   const [low, high] = instrument.comfortableRange;
+  const key = keyOf(instrument.fundamental);
+  const alias = ALIASES[instrument.id];
+
   let bestIndex = 0;
   let bestScore = -Infinity;
   parsed.parts.forEach((part, index) => {
     if (!part.range || part.noteCount === 0) return;
     const [partLow, partHigh] = part.range;
+
+    const partKey = partKeyOf(part.transposeChromatic);
+    const keyFits = partKey === key || partKey === 0;
+    const named = alias?.test(`${part.name} ${part.displayName}`) ?? false;
+
     const overlap = Math.min(high, partHigh) - Math.max(low, partLow);
     const centreDistance = Math.abs((partLow + partHigh) / 2 - (low + high) / 2);
-    const score = overlap - centreDistance;
+
+    const score =
+      (keyFits ? 1000 : 0) + (named ? 100 : 0) + overlap - centreDistance;
     if (score > bestScore) {
       bestScore = score;
       bestIndex = index;
     }
   });
   return bestIndex;
-}
-
-function fillParts(): void {
-  const sheet = activeSheet();
-  partSelect.innerHTML = "";
-  if (!sheet) {
-    partField.classList.add("hidden");
-    partHint.textContent = "";
-    return;
-  }
-  sheet.score.parts.forEach((part, index) => {
-    const option = document.createElement("option");
-    option.value = String(index);
-    option.textContent = `${part.name}${part.noteCount ? "" : " (vide)"}`;
-    option.disabled = part.noteCount === 0;
-    partSelect.append(option);
-  });
-  partSelect.value = String(sheet.partIndex);
-  partField.classList.remove("hidden");
-
-  const part = partOf(sheet);
-  partHint.textContent = part?.range
-    ? `${part.noteCount} notes, de ${describeRange(part.range[0], part.range[1])} en son réel.`
-    : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -217,9 +229,32 @@ function renderSheets(): void {
     title.textContent = sheet.name;
     const detail = document.createElement("span");
     detail.className = "sheet__detail";
-    detail.textContent = `${partOf(sheet)?.name ?? "—"} · ${stateLabel(sheet)}`;
+    const part = partOf(sheet);
+    detail.textContent = part?.range
+      ? `${stateLabel(sheet)} · ${describeRange(part.range[0], part.range[1])}`
+      : stateLabel(sheet);
     pick.append(title, detail);
     pick.addEventListener("click", () => select(index));
+
+    const controls = document.createElement("div");
+    controls.className = "sheet__controls";
+
+    const parts = document.createElement("select");
+    parts.className = "sheet__part";
+    parts.setAttribute("aria-label", `Partie de ${sheet.name}`);
+    sheet.score.parts.forEach((candidate, candidateIndex) => {
+      const option = document.createElement("option");
+      option.value = String(candidateIndex);
+      option.textContent = `${candidate.name}${candidate.noteCount ? "" : " (vide)"}`;
+      option.disabled = candidate.noteCount === 0;
+      parts.append(option);
+    });
+    parts.value = String(sheet.partIndex);
+    parts.addEventListener("change", () => {
+      sheet.partIndex = Number(parts.value);
+      select(index);
+      void refreshOne(sheet, index);
+    });
 
     const download = document.createElement("button");
     download.type = "button";
@@ -235,7 +270,8 @@ function renderSheets(): void {
     remove.setAttribute("aria-label", `Retirer ${sheet.name}`);
     remove.addEventListener("click", () => removeSheet(index));
 
-    row.append(pick, download, remove);
+    controls.append(parts, download, remove);
+    row.append(pick, controls);
     sheetList.append(row);
   });
   sheetList.classList.toggle("hidden", sheets.length === 0);
@@ -245,7 +281,6 @@ function renderSheets(): void {
 function select(index: number): void {
   if (index === active || !sheets[index]) return;
   active = index;
-  fillParts();
   renderMessages();
   renderSheets();
   showPages();
@@ -254,7 +289,6 @@ function select(index: number): void {
 function removeSheet(index: number): void {
   sheets.splice(index, 1);
   if (active >= sheets.length) active = Math.max(0, sheets.length - 1);
-  fillParts();
   renderMessages();
   renderSheets();
   showPages();
@@ -368,6 +402,21 @@ async function engraveSheet(sheet: Sheet, token: number): Promise<void> {
   }
 }
 
+/** Re-engraves a single score, after its part was changed by hand. */
+async function refreshOne(sheet: Sheet, index: number): Promise<void> {
+  const token = ++generation;
+  sheet.state = "pending";
+  sheet.pages = [];
+  renderSheets();
+  showPages();
+  status.innerHTML = `<span class="spinner"></span> Gravure de ${sheet.name}…`;
+  await engraveSheet(sheet, token);
+  if (token !== generation) return;
+  renderSheets();
+  if (index === active) showPages();
+  status.textContent = "";
+}
+
 /**
  * Re-engraves everything, active score first, so the viewer fills straight
  * away while the rest of the folder catches up behind it.
@@ -447,7 +496,6 @@ async function handleFiles(files: FileList | File[]): Promise<void> {
     sheets = [...sheets, ...added];
     active = firstNew;
   }
-  fillParts();
   renderMessages();
   if (failures.length) {
     showMessage(
@@ -495,11 +543,11 @@ function bind(): void {
     settings.readingId = "";
     fillReadings();
     persist();
-    // Another instrument means another line, in every score.
+    // Another instrument means another line, in every score. Any hand-picked
+    // part went with the old instrument, so it is re-guessed too.
     for (const sheet of sheets) {
       sheet.partIndex = guessPart(sheet.score, currentInstrument());
     }
-    fillParts();
     void refresh();
   });
 
@@ -526,14 +574,6 @@ function bind(): void {
       void refresh();
     });
   }
-
-  partSelect.addEventListener("change", () => {
-    const sheet = activeSheet();
-    if (!sheet) return;
-    sheet.partIndex = Number(partSelect.value);
-    fillParts();
-    void refresh();
-  });
 
   dropzone.addEventListener("click", () => fileInput.click());
   dropzone.addEventListener("keydown", (event) => {
@@ -572,7 +612,6 @@ function bind(): void {
     sheets = [];
     active = 0;
     fileInput.value = "";
-    fillParts();
     renderMessages();
     renderSheets();
     showPages();
