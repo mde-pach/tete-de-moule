@@ -1,0 +1,42 @@
+---
+const annee = new Date().getFullYear();
+---
+
+<footer class="pied">
+  <div class="contenu pied__grille">
+    <p class="pied__texte">
+      Fait pour les Moules Libres et Flamboyantes. Ta partition ne quitte jamais ton
+      navigateur&nbsp;: tout le calcul se fait sur ton appareil.
+    </p>
+    <p class="pied__texte pied__texte--fin">
+      <a href="https://github.com/mde-pach/tete-de-moule">Code source</a> · {annee}
+    </p>
+  </div>
+</footer>
+
+<style>
+  .pied {
+    margin-top: 5rem;
+    border-top: 1px solid var(--trait);
+    padding: 2rem 0 3rem;
+  }
+
+  .pied__grille {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2.5rem;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .pied__texte {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--encre-douce);
+    max-width: 48ch;
+  }
+
+  .pied__texte--fin {
+    white-space: nowrap;
+  }
+</style>

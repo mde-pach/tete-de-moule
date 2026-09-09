@@ -1,0 +1,238 @@
+/*
+  Tête de Moule — feuille de base.
+
+  La palette vient de la coquille de moule : noir violacé, nacre pâle, et
+  l'orange de la chair pour les actions. Un seul accent vif, réservé au geste
+  principal ; tout le reste reste calme pour ne pas concurrencer la partition,
+  qui est le vrai sujet de la page.
+*/
+
+:root {
+  --encre: #1a1524;
+  --encre-douce: #574d68;
+  --nacre: #efebf3;
+  --nacre-creuse: #e4dded;
+  --papier: #ffffff;
+  --moule: #4b2e70;
+  --moule-clair: #6a4a95;
+  --flamboyant: #e2521b;
+  --flamboyant-sombre: #b93f11;
+  --trait: #d9d1e4;
+
+  --serif: 'Bricolage Grotesque', 'Trebuchet MS', sans-serif;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --rythme: 1.5rem;
+  --largeur: 62rem;
+  --arrondi: 10px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--nacre);
+  color: var(--encre);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  font-feature-settings: 'kern' 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--serif);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: clamp(2.4rem, 6.5vw, 4.1rem);
+}
+
+h2 {
+  font-size: clamp(1.35rem, 3vw, 1.75rem);
+  letter-spacing: -0.015em;
+}
+
+h3 {
+  font-size: 1.05rem;
+  font-family: var(--sans);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+p {
+  margin: 0 0 var(--rythme);
+  max-width: 60ch;
+}
+
+a {
+  color: var(--moule);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  color: var(--flamboyant-sombre);
+}
+
+:focus-visible {
+  outline: 2.5px solid var(--flamboyant);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.contenu {
+  width: min(100% - 2.5rem, var(--largeur));
+  margin-inline: auto;
+}
+
+/* --- boutons ------------------------------------------------------------ */
+
+.bouton {
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: var(--arrondi);
+  padding: 0.7em 1.25em;
+  cursor: pointer;
+  background: var(--moule);
+  color: #fff;
+  transition: background-color 120ms ease, transform 120ms ease;
+}
+
+.bouton:hover:not(:disabled) {
+  background: var(--moule-clair);
+}
+
+.bouton:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.bouton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bouton--principal {
+  background: var(--flamboyant);
+  font-size: 1.05rem;
+  padding: 0.8em 1.5em;
+}
+
+.bouton--principal:hover:not(:disabled) {
+  background: var(--flamboyant-sombre);
+}
+
+.bouton--discret {
+  background: transparent;
+  color: var(--moule);
+  border-color: var(--trait);
+}
+
+.bouton--discret:hover:not(:disabled) {
+  background: var(--nacre-creuse);
+  color: var(--moule);
+}
+
+/* --- champs ------------------------------------------------------------- */
+
+select {
+  font: inherit;
+  color: var(--encre);
+  background: var(--papier);
+  border: 1px solid var(--trait);
+  border-radius: var(--arrondi);
+  padding: 0.55em 2.2em 0.55em 0.75em;
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--encre-douce) 50%),
+    linear-gradient(135deg, var(--encre-douce) 50%, transparent 50%);
+  background-position: calc(100% - 1.05em) 55%, calc(100% - 0.72em) 55%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+.interrupteur {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.94rem;
+}
+
+.interrupteur input {
+  appearance: none;
+  width: 2.4em;
+  height: 1.35em;
+  margin: 0;
+  border-radius: 1em;
+  background: var(--nacre-creuse);
+  border: 1px solid var(--trait);
+  position: relative;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+  flex: none;
+}
+
+.interrupteur input::after {
+  content: '';
+  position: absolute;
+  inset: 2px auto 2px 2px;
+  width: 1.05em;
+  border-radius: 50%;
+  background: var(--papier);
+  box-shadow: 0 1px 2px rgb(26 21 36 / 0.25);
+  transition: transform 140ms ease;
+}
+
+.interrupteur input:checked {
+  background: var(--moule);
+  border-color: var(--moule);
+}
+
+.interrupteur input:checked::after {
+  transform: translateX(1.05em);
+}
+
+/* --- utilitaires -------------------------------------------------------- */
+
+.hors-ecran {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
