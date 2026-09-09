@@ -11,7 +11,7 @@ import { DOMParser } from "linkedom";
 import { assertPreferenceOrder, fingeringFor } from "../src/lib/fingering.ts";
 import { findInstrument, writtenPitch } from "../src/lib/instruments.ts";
 import { extractMscx, parseScore } from "../src/lib/musescore.ts";
-import { frenchNoteName, spell, toMusicXml } from "../src/lib/musicxml.ts";
+import { frenchNoteName, multiRestRuns, spell, toMusicXml } from "../src/lib/musicxml.ts";
 
 (globalThis as { DOMParser?: unknown }).DOMParser = DOMParser;
 
@@ -82,6 +82,35 @@ check(
   notes.slice(0, 20).map((note) => frenchNoteName(note.tpc + 2) + spell(note.tpc + 2, writtenPitch(note.pitch, bass.transpose)).octave),
   notes.slice(0, 20).map((note) => frenchNoteName(note.tpc + 2) + (spell(note.tpc + 2, writtenPitch(note.pitch, treble.transpose)).octave - 1)),
 );
+
+// Empty bars must collapse the way the printed part does. Checked against the
+// MuseScore-engraved reference for this fixture: runs of 6, 6 and 4 bars, and
+// the lone rest carrying "Chant" left alone so its text survives.
+// The bass part is the one the reference PDF was engraved from.
+const bassPart = score.parts.find((candidate) => /tuba|basse/i.test(candidate.name)) ?? part;
+const runs = [...multiRestRuns(bassPart.measures)].map(([index, length]) => [
+  bassPart.measures[index]!.number,
+  length,
+]);
+check("silences group\u00e9s comme sur la partition officielle", runs, [[25, 6], [62, 6], [82, 4]]);
+
+const bassXml = toMusicXml({
+  part: bassPart,
+  instrument: euphonium,
+  reading: bass,
+  valveCount: 3,
+  showFingerings: true,
+  showNoteNames: true,
+  title: score.title,
+  partLabel: bassPart.name,
+  tempoBpm: score.tempoBpm,
+});
+check(
+  "balises multiple-rest \u00e9mises",
+  (bassXml.match(/<multiple-rest>(\d+)<\/multiple-rest>/g) ?? []),
+  ["<multiple-rest>6</multiple-rest>", "<multiple-rest>6</multiple-rest>", "<multiple-rest>4</multiple-rest>"],
+);
+check("le texte Chant survit", bassXml.includes("<words>Chant</words>"), true);
 
 console.log(failures === 0 ? "\nTous les contr\u00f4les passent." : `\n${failures} \u00e9chec(s).`);
 process.exit(failures === 0 ? 0 : 1);

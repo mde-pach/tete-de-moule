@@ -81,6 +81,74 @@ export function frenchNoteName(tpc: number): string {
   return FRENCH_NAMES[step]! + (FRENCH_ACCIDENTALS[alter] ?? "");
 }
 
+/**
+ * Below this many consecutive empty bars, a rest is left as it is: a lone
+ * bar marked "1" reads worse than a plain whole rest.
+ */
+const MIN_MULTI_REST = 2;
+
+function isSilent(measure: Measure): boolean {
+  let restCount = 0;
+  for (const event of measure.events) {
+    if (event.kind === "note") return false;
+    if (event.kind === "direction") return false;
+    if (event.durationType !== "measure") return false;
+    restCount += 1;
+  }
+  return restCount === 1;
+}
+
+/**
+ * Groups runs of empty bars so the engraver can collapse them into a single
+ * barred rest topped with a count, the way a printed part does. Without this a
+ * player turns pages through bars that hold nothing, and the bar numbers stop
+ * matching everyone else's part.
+ *
+ * A run stops at anything that must stay visible on its own bar: a key or time
+ * change, a repeat sign, a volta, or a direction such as a rehearsal cue —
+ * engravers drop the text of a bar swallowed by a multi-rest.
+ *
+ * Returns, for the first bar of each run, how many bars it covers.
+ */
+export function multiRestRuns(
+  measures: readonly Measure[],
+): ReadonlyMap<number, number> {
+  const runs = new Map<number, number>();
+  let start: number | null = null;
+
+  const flush = (end: number): void => {
+    if (start === null) return;
+    const length = end - start;
+    if (length >= MIN_MULTI_REST) runs.set(start, length);
+    start = null;
+  };
+
+  measures.forEach((measure, index) => {
+    // The opening bar is never absorbed: it carries the clef, the key and the
+    // tempo mark, and an engraver drops whatever sits on a bar it swallows.
+    if (index === 0) return;
+
+    const breaksBefore =
+      measure.keyFifths !== null ||
+      measure.time !== null ||
+      measure.length !== null ||
+      measure.startRepeat ||
+      measure.voltaStart !== null;
+    if (breaksBefore) flush(index);
+
+    if (!isSilent(measure)) {
+      flush(index);
+      return;
+    }
+
+    if (start === null) start = index;
+
+    if (measure.endRepeat !== null || measure.voltaStop) flush(index + 1);
+  });
+  flush(measures.length);
+  return runs;
+}
+
 export interface RewriteOptions {
   readonly part: ScorePart;
   readonly instrument: Instrument;
@@ -168,12 +236,15 @@ export function toMusicXml(options: RewriteOptions): string {
     .leaf("part-name", options.partLabel).close("score-part").close("part-list");
   xml.open("part", { id: "P1" });
 
+  const multiRests = multiRestRuns(part.measures);
+
   let first = true;
-  for (const measure of part.measures) {
+  for (const [index, measure] of part.measures.entries()) {
     xml.open("measure", { number: measure.number });
 
+    const multiRest = multiRests.get(index) ?? null;
     const needsAttributes =
-      first || measure.keyFifths !== null || measure.time !== null;
+      first || measure.keyFifths !== null || measure.time !== null || multiRest !== null;
     if (needsAttributes) {
       xml.open("attributes");
       if (first) xml.leaf("divisions", DIVISIONS);
@@ -197,6 +268,12 @@ export function toMusicXml(options: RewriteOptions): string {
           xml.leaf("octave-change", reading.transpose.octaveChange);
         }
         xml.close("transpose");
+      }
+      // measure-style comes last inside attributes, per the MusicXML schema.
+      if (multiRest !== null) {
+        xml.open("measure-style")
+          .leaf("multiple-rest", multiRest)
+          .close("measure-style");
       }
       xml.close("attributes");
     }
