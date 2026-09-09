@@ -5,6 +5,8 @@
  * zoom. Should the converter choke on a page, that page falls back to a
  * high-resolution bitmap: a slightly heavier file beats no file at all.
  */
+import { loadChunk } from "./chunks.ts";
+
 const A4_POINTS = { width: 595.28, height: 841.89 } as const;
 const RASTER_SCALE = 3;
 
@@ -16,13 +18,13 @@ export interface PdfResult {
 }
 
 export async function pagesToPdf(svgPages: string[]): Promise<PdfResult> {
-  const { jsPDF } = await import("jspdf");
+  const { jsPDF } = await loadChunk(() => import("jspdf"));
   const document_ = new jsPDF({ unit: "pt", format: "a4", compress: true });
   let mode: PdfMode = "vector";
 
   let svgToPdf: typeof import("svg2pdf.js").svg2pdf | null = null;
   try {
-    ({ svg2pdf: svgToPdf } = await import("svg2pdf.js"));
+    ({ svg2pdf: svgToPdf } = await loadChunk(() => import("svg2pdf.js")));
   } catch {
     svgToPdf = null;
   }

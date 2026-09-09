@@ -4,6 +4,8 @@
  * The module weighs a few megabytes, so it is imported lazily: the landing page
  * stays light and the engraver only loads once a file has been dropped.
  */
+import { loadChunk } from "./chunks.ts";
+
 let toolkitPromise: Promise<VerovioToolkitLike> | null = null;
 
 interface VerovioToolkitLike {
@@ -27,8 +29,8 @@ async function loadToolkit(): Promise<VerovioToolkitLike> {
   if (!toolkitPromise) {
     toolkitPromise = (async () => {
       const [{ default: createModule }, { VerovioToolkit }] = await Promise.all([
-        import("verovio/wasm"),
-        import("verovio/esm"),
+        loadChunk(() => import("verovio/wasm")),
+        loadChunk(() => import("verovio/esm")),
       ]);
       const module = await createModule();
       return new VerovioToolkit(module) as unknown as VerovioToolkitLike;
