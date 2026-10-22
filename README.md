@@ -32,6 +32,7 @@ site/src/lib/instruments.ts  catalogue : acoustique séparée de la lecture
 site/src/lib/musescore.ts    lecture des .mscz
 site/src/lib/musicxml.ts     réécriture d'une partie, avec les annotations
 site/src/lib/engraving.ts    gravure via Verovio (WebAssembly)
+site/src/lib/transposition.ts  monter ou descendre un morceau pour s'exercer
 site/src/lib/pdf.ts          export PDF
 site/src/lib/settings.ts     réglages retenus d'une visite à l'autre
 site/src/lib/messages.ts     tous les textes affichés, en français
@@ -53,6 +54,15 @@ plus courte, donc la plus juste.
 Les doigtés se calculent toujours depuis la **hauteur réelle**, jamais depuis
 l'écriture. Une partie peut donc être réécrite dans n'importe quelle clé sans
 que les doigtés bougent.
+
+## S'exercer dans un autre ton
+
+Chaque partition a, dans sa ligne, un menu pour la monter ou la descendre (d'un
+demi-ton à une octave). C'est réglé morceau par morceau, pas dans le panneau :
+une marche peut aller telle quelle et la suivante avoir besoin de descendre
+d'un ton. Le décalage s'applique au son réel, avant tout le reste, donc les
+doigtés suivent. L'armure retenue est celle qui se lit le mieux une fois la
+lecture de l'instrument appliquée (Ré♭ plutôt que Do♯ pour un Si♭).
 
 ## Le piège de l'octave
 

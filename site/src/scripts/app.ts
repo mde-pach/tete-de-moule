@@ -3,12 +3,14 @@
  *
  * A player brings a folder, not one piece: several scores are held at once.
  * The panel on the left describes the *player* — instrument, reading, valves —
- * and is shared by everything. Which line to read is a property of each score,
- * so it lives in that score's own row.
+ * and is shared by everything. Which line to read, and how far to move it up or
+ * down for practice, are properties of each score, so they live in that
+ * score's own row.
  */
 import { engrave } from "../lib/engraving.ts";
 import {
   INSTRUMENTS,
+  fifthsShift,
   findInstrument,
   findReading,
   type Instrument,
@@ -19,6 +21,7 @@ import { extractMscx, parseScore, type ParsedScore, type ScorePart } from "../li
 import { toMusicXml } from "../lib/musicxml.ts";
 import { downloadBlob, pagesToPdf } from "../lib/pdf.ts";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from "../lib/settings.ts";
+import { PRACTICE_SHIFTS, describeShift, transposePart } from "../lib/transposition.ts";
 
 const element = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -52,6 +55,8 @@ interface Sheet {
   readonly score: ParsedScore;
   /** Every score gets its own part: the player's line is not the same index. */
   partIndex: number;
+  /** Semitones the part is moved for practice; 0 plays it as written. */
+  shift: number;
   pages: string[];
   state: SheetState;
   problem: string;
@@ -81,6 +86,13 @@ function activeSheet(): Sheet | null {
 
 function partOf(sheet: Sheet): ScorePart | null {
   return sheet.score.parts[sheet.partIndex] ?? null;
+}
+
+/** The part as it will be played: the chosen line, moved by the sheet's shift. */
+function playedPartOf(sheet: Sheet): ScorePart | null {
+  const part = partOf(sheet);
+  if (!part) return null;
+  return transposePart(part, sheet.shift, fifthsShift(currentReading().transpose));
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +241,7 @@ function renderSheets(): void {
     title.textContent = sheet.name;
     const detail = document.createElement("span");
     detail.className = "sheet__detail";
-    const part = partOf(sheet);
+    const part = playedPartOf(sheet);
     detail.textContent = part?.range
       ? `${stateLabel(sheet)} · ${describeRange(part.range[0], part.range[1])}`
       : stateLabel(sheet);
@@ -256,6 +268,23 @@ function renderSheets(): void {
       void refreshOne(sheet, index);
     });
 
+    const shift = document.createElement("select");
+    shift.className = "sheet__shift";
+    shift.setAttribute("aria-label", `Transposer ${sheet.name}`);
+    shift.title = "Monter ou descendre ce morceau pour t'exercer";
+    for (const semitones of PRACTICE_SHIFTS) {
+      const option = document.createElement("option");
+      option.value = String(semitones);
+      option.textContent = describeShift(semitones);
+      shift.append(option);
+    }
+    shift.value = String(sheet.shift);
+    shift.addEventListener("change", () => {
+      sheet.shift = Number(shift.value);
+      select(index);
+      void refreshOne(sheet, index);
+    });
+
     const download = document.createElement("button");
     download.type = "button";
     download.className = "button button--accent sheet__action";
@@ -270,7 +299,7 @@ function renderSheets(): void {
     remove.setAttribute("aria-label", `Retirer ${sheet.name}`);
     remove.addEventListener("click", () => removeSheet(index));
 
-    controls.append(parts, download, remove);
+    controls.append(parts, shift, download, remove);
     row.append(pick, controls);
     sheetList.append(row);
   });
@@ -363,9 +392,10 @@ function turnPage(delta: number): void {
 // Engraving
 // ---------------------------------------------------------------------------
 function buildMusicXml(sheet: Sheet): string | null {
-  const part = partOf(sheet);
+  const part = playedPartOf(sheet);
   if (!part) return null;
   const reading = currentReading();
+  const shiftLabel = sheet.shift === 0 ? "" : ` — ${describeShift(sheet.shift)}`;
   return toMusicXml({
     part,
     instrument: currentInstrument(),
@@ -374,7 +404,7 @@ function buildMusicXml(sheet: Sheet): string | null {
     showFingerings: settings.showFingerings,
     showNoteNames: settings.showNoteNames,
     title: sheet.score.title || sheet.name,
-    partLabel: `${part.name} — ${reading.label}`.replace(/[♭♯]/g, (sign) => (sign === "♭" ? "b" : "#")),
+    partLabel: `${part.name} — ${reading.label}${shiftLabel}`.replace(/[♭♯]/g, (sign) => (sign === "♭" ? "b" : "#")),
     tempoBpm: sheet.score.tempoBpm,
   });
 }
@@ -472,6 +502,7 @@ async function readSheet(file: File): Promise<Sheet | string> {
       name,
       score: parsed,
       partIndex: guessPart(parsed, currentInstrument()),
+      shift: 0,
       pages: [],
       state: "pending",
       problem: "",
@@ -515,7 +546,8 @@ async function downloadSheet(sheet: Sheet): Promise<void> {
   status.innerHTML = `<span class="spinner"></span> PDF de ${sheet.name}…`;
   try {
     const { blob, mode } = await pagesToPdf(sheet.pages);
-    downloadBlob(blob, `${sheet.name} — ${currentReading().id}.pdf`);
+    const suffix = sheet.shift === 0 ? "" : ` (${describeShift(sheet.shift)})`;
+    downloadBlob(blob, `${sheet.name} — ${currentReading().id}${suffix}.pdf`);
     status.textContent = mode === "raster" ? "PDF prêt (rendu image)." : "PDF prêt.";
   } catch (error) {
     showMessage("error", error instanceof Error ? error.message : "Export PDF impossible.");
